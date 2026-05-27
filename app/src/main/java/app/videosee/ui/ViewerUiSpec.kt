@@ -1,0 +1,10 @@
+package app.videosee.ui
+
+object ViewerUiSpec {
+    const val CONTROLS_VISIBLE_BY_DEFAULT = false
+    const val FOLDER_SWITCH_DURATION_MILLIS = 180
+    const val SCREEN_TRANSITION_DURATION_MILLIS = 180
+    const val VIEWER_TRANSITION_DURATION_MILLIS = 180
+    const val OVERLAY_TRANSITION_DURATION_MILLIS = 140
+    const val SELECTION_TRANSITION_DURATION_MILLIS = 160
+}
