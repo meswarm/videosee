@@ -69,6 +69,50 @@ class MediaOrganizerTest {
     }
 
     @Test
+    fun groups_rule_matching_media_by_author_id() {
+        val items = listOf(
+            mediaItem(
+                id = 1,
+                displayName = "xiaoxinmaila94_1778085537_7636819227521142267.mp4",
+                dateModifiedSeconds = 10,
+            ),
+            mediaItem(
+                id = 2,
+                displayName = "xiaoxinmaila94_1778223655_7637412444436490170_001.jpg",
+                dateModifiedSeconds = 30,
+                mediaType = MediaType.Image,
+            ),
+            mediaItem(
+                id = 3,
+                displayName = "3x2a58a7j538qsy_176691377787_3xu3jys3tignesq.mp4",
+                dateModifiedSeconds = 20,
+            ),
+        )
+
+        val authors = MediaOrganizer.groupByAuthor(items)
+
+        assertEquals(listOf("author:xiaoxinmaila94", "author:3x2a58a7j538qsy"), authors.map { it.id })
+        assertEquals("xiaoxinmaila94", authors[0].name)
+        assertEquals(2, authors[0].count)
+        assertEquals("content://media/2", authors[0].previewUri)
+        assertEquals(listOf(30L, 10L), authors[0].items.map { it.dateModifiedSeconds })
+    }
+
+    @Test
+    fun ignores_media_without_two_underscores_when_grouping_by_author() {
+        val authors = MediaOrganizer.groupByAuthor(
+            listOf(
+                mediaItem(id = 1, displayName = "normal.mp4", dateModifiedSeconds = 10),
+                mediaItem(id = 2, displayName = "author_123.mp4", dateModifiedSeconds = 20),
+                mediaItem(id = 3, displayName = "_123_456.mp4", dateModifiedSeconds = 30),
+                mediaItem(id = 4, displayName = "author__456.mp4", dateModifiedSeconds = 40),
+            ),
+        )
+
+        assertEquals(emptyList<MediaFolder>(), authors)
+    }
+
+    @Test
     fun exposes_display_aspect_ratio_when_dimensions_are_available() {
         val item = MediaItem(
             id = 10,
@@ -84,5 +128,23 @@ class MediaOrganizerTest {
         )
 
         assertEquals(0.5625f, item.displayAspectRatio!!, 0.0001f)
+    }
+
+    private fun mediaItem(
+        id: Long,
+        displayName: String,
+        dateModifiedSeconds: Long,
+        mediaType: MediaType = MediaType.Video,
+    ): MediaItem {
+        return MediaItem(
+            id = id,
+            uri = "content://media/$id",
+            displayName = displayName,
+            bucketId = "downloads",
+            bucketName = "Downloads",
+            mediaType = mediaType,
+            dateModifiedSeconds = dateModifiedSeconds,
+            durationMillis = if (mediaType == MediaType.Video) 5_000 else null,
+        )
     }
 }

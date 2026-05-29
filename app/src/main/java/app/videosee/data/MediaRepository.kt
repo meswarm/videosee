@@ -11,10 +11,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 class MediaRepository(private val context: Context) {
-    suspend fun loadFolders(): List<MediaFolder> = withContext(Dispatchers.IO) {
+    suspend fun loadLibrary(): MediaLibrary = withContext(Dispatchers.IO) {
         val images = runCatching { loadImages() }.getOrDefault(emptyList())
         val videos = runCatching { loadVideos() }.getOrDefault(emptyList())
-        MediaOrganizer.groupByFolder(images + videos)
+        val items = images + videos
+        MediaLibrary(
+            folders = MediaOrganizer.groupByFolder(items),
+            authors = MediaOrganizer.groupByAuthor(items),
+        )
     }
 
     private fun loadImages(): List<MediaItem> {
@@ -117,3 +121,8 @@ class MediaRepository(private val context: Context) {
         } ?: emptyList()
     }
 }
+
+data class MediaLibrary(
+    val folders: List<MediaFolder>,
+    val authors: List<MediaFolder>,
+)

@@ -105,6 +105,9 @@ import androidx.media3.ui.PlayerView
 import app.videosee.domain.MediaFolder
 import app.videosee.domain.MediaItem
 import app.videosee.domain.MediaType
+import app.videosee.domain.CollectionSortField
+import app.videosee.domain.MediaSortField
+import app.videosee.domain.SortDirection
 import app.videosee.ui.PlaybackSpeedOptions
 import app.videosee.ui.PlaybackTimeFormatter
 import app.videosee.ui.SwipeIntent
@@ -171,10 +174,17 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
         state = state,
         onRequestPermission = { launcher.launch(requiredPermissions()) },
         onSelectFolder = viewModel::selectFolder,
+        onSelectAuthor = viewModel::selectAuthor,
+        onSelectBrowserMode = viewModel::selectBrowserMode,
+        onSelectCollectionSortField = viewModel::selectCollectionSortField,
+        onToggleCollectionSortDirection = viewModel::toggleCollectionSortDirection,
+        onSelectMediaSortField = viewModel::selectMediaSortField,
+        onToggleMediaSortDirection = viewModel::toggleMediaSortDirection,
         onOpenItem = viewModel::openViewer,
         onCloseViewer = viewModel::closeViewer,
         onNext = viewModel::showNext,
         onPrevious = viewModel::showPrevious,
+        onRefresh = viewModel::refresh,
     )
 }
 
@@ -183,10 +193,17 @@ private fun VideoSeeApp(
     state: VideoSeeUiState,
     onRequestPermission: () -> Unit,
     onSelectFolder: (String) -> Unit,
+    onSelectAuthor: (String) -> Unit,
+    onSelectBrowserMode: (BrowserMode) -> Unit,
+    onSelectCollectionSortField: (CollectionSortField) -> Unit,
+    onToggleCollectionSortDirection: () -> Unit,
+    onSelectMediaSortField: (MediaSortField) -> Unit,
+    onToggleMediaSortDirection: () -> Unit,
     onOpenItem: (MediaItem) -> Unit,
     onCloseViewer: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    onRefresh: () -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -208,7 +225,18 @@ private fun VideoSeeApp(
                 AppContentState.Permission -> PermissionScreen(onRequestPermission)
                 AppContentState.Loading -> LoadingScreen()
                 AppContentState.Empty -> EmptyScreen("No images or videos found")
-                AppContentState.Browser -> BrowserScreen(state, onSelectFolder, onOpenItem)
+                AppContentState.Browser -> BrowserScreen(
+                    state = state,
+                    onSelectFolder = onSelectFolder,
+                    onSelectAuthor = onSelectAuthor,
+                    onSelectBrowserMode = onSelectBrowserMode,
+                    onSelectCollectionSortField = onSelectCollectionSortField,
+                    onToggleCollectionSortDirection = onToggleCollectionSortDirection,
+                    onSelectMediaSortField = onSelectMediaSortField,
+                    onToggleMediaSortDirection = onToggleMediaSortDirection,
+                    onOpenItem = onOpenItem,
+                    onRefresh = onRefresh,
+                )
             }
         }
 
@@ -290,13 +318,36 @@ private fun EmptyScreen(message: String) {
 private fun BrowserScreen(
     state: VideoSeeUiState,
     onSelectFolder: (String) -> Unit,
+    onSelectAuthor: (String) -> Unit,
+    onSelectBrowserMode: (BrowserMode) -> Unit,
+    onSelectCollectionSortField: (CollectionSortField) -> Unit,
+    onToggleCollectionSortDirection: () -> Unit,
+    onSelectMediaSortField: (MediaSortField) -> Unit,
+    onToggleMediaSortDirection: () -> Unit,
     onOpenItem: (MediaItem) -> Unit,
+    onRefresh: () -> Unit,
 ) {
+    val collections = state.visibleCollections
+    val selectedCollection = state.selectedCollection
+    val onSelectCollection = when (state.browserMode) {
+        BrowserMode.Folder -> onSelectFolder
+        BrowserMode.Author -> onSelectAuthor
+    }
+
     Row(Modifier.fillMaxSize()) {
         FolderRail(
-            folders = state.folders,
-            selectedFolderId = state.selectedFolder?.id,
-            onSelectFolder = onSelectFolder,
+            collections = collections,
+            selectedCollectionId = selectedCollection?.id,
+            browserMode = state.browserMode,
+            hasAuthors = state.authors.isNotEmpty(),
+            isRefreshing = state.isRefreshing,
+            onRefresh = onRefresh,
+            onSelectBrowserMode = onSelectBrowserMode,
+            collectionSortField = state.collectionSortField,
+            collectionSortDirection = state.collectionSortDirection,
+            onSelectCollectionSortField = onSelectCollectionSortField,
+            onToggleCollectionSortDirection = onToggleCollectionSortDirection,
+            onSelectCollection = onSelectCollection,
             modifier = Modifier.width(172.dp).fillMaxHeight(),
         )
         Box(
@@ -306,74 +357,308 @@ private fun BrowserScreen(
                 .background(Color(0xFF252A33)),
         )
         Crossfade(
-            targetState = state.selectedFolder,
+            targetState = selectedCollection,
             modifier = Modifier.weight(1f).fillMaxHeight(),
             animationSpec = tween(ViewerUiSpec.FOLDER_SWITCH_DURATION_MILLIS),
-            label = "folder_media_switch",
-        ) { folder ->
-            MediaGrid(
-                items = folder?.items.orEmpty(),
-                onOpenItem = onOpenItem,
-                modifier = Modifier.fillMaxHeight(),
+            label = "media_collection_switch",
+        ) { collection ->
+            if (collection == null) {
+                EmptyScreen("No media found")
+            } else {
+                Column(Modifier.fillMaxHeight()) {
+                    MediaSortToolbar(
+                        sortField = state.mediaSortField,
+                        sortDirection = state.mediaSortDirection,
+                        onSelectSortField = onSelectMediaSortField,
+                        onToggleSortDirection = onToggleMediaSortDirection,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    MediaGrid(
+                        items = state.selectedItems,
+                        onOpenItem = onOpenItem,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaSortToolbar(
+    sortField: MediaSortField,
+    sortDirection: SortDirection,
+    onSelectSortField: (MediaSortField) -> Unit,
+    onToggleSortDirection: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .height(48.dp)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        SortChip(
+            text = "名称",
+            selected = sortField == MediaSortField.Name,
+            onClick = { onSelectSortField(MediaSortField.Name) },
+        )
+        SortChip(
+            text = "最新",
+            selected = sortField == MediaSortField.ModifiedTime,
+            onClick = { onSelectSortField(MediaSortField.ModifiedTime) },
+        )
+        SortChip(
+            text = sortDirection.label(),
+            selected = true,
+            onClick = onToggleSortDirection,
+        )
+    }
+}
+
+@Composable
+private fun CollectionSortToolbar(
+    sortField: CollectionSortField,
+    sortDirection: SortDirection,
+    onSelectSortField: (CollectionSortField) -> Unit,
+    onToggleSortDirection: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .height(74.dp)
+            .padding(start = 10.dp, end = 10.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                SortChip(
+                    text = "名称",
+                    selected = sortField == CollectionSortField.Name,
+                    onClick = { onSelectSortField(CollectionSortField.Name) },
+                    compact = true,
+                )
+                SortChip(
+                    text = "数量",
+                    selected = sortField == CollectionSortField.Count,
+                    onClick = { onSelectSortField(CollectionSortField.Count) },
+                    compact = true,
+                )
+                SortChip(
+                    text = "最新",
+                    selected = sortField == CollectionSortField.ModifiedTime,
+                    onClick = { onSelectSortField(CollectionSortField.ModifiedTime) },
+                    compact = true,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                SortChip(
+                    text = sortDirection.label(),
+                    selected = true,
+                    onClick = onToggleSortDirection,
+                    compact = true,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SortChip(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    compact: Boolean = false,
+) {
+    val background by animateColorAsState(
+        targetValue = if (selected) Color(0xFFFF8A00) else Color(0xFF20242C),
+        animationSpec = tween(ViewerUiSpec.SELECTION_TRANSITION_DURATION_MILLIS),
+        label = "sort_chip_background",
+    )
+    Text(
+        text,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(background)
+            .clickable { onClick() }
+            .padding(horizontal = if (compact) 6.dp else 8.dp, vertical = 6.dp),
+        color = if (selected) Color(0xFF1A0D00) else Color.White,
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        maxLines = 1,
+    )
+}
+
+private fun SortDirection.label(): String {
+    return when (this) {
+        SortDirection.Ascending -> "正序"
+        SortDirection.Descending -> "倒序"
+    }
+}
+
+@Composable
+private fun FolderRail(
+    collections: List<MediaFolder>,
+    selectedCollectionId: String?,
+    browserMode: BrowserMode,
+    hasAuthors: Boolean,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    onSelectBrowserMode: (BrowserMode) -> Unit,
+    collectionSortField: CollectionSortField,
+    collectionSortDirection: SortDirection,
+    onSelectCollectionSortField: (CollectionSortField) -> Unit,
+    onToggleCollectionSortDirection: () -> Unit,
+    onSelectCollection: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.background(Color(0xFF15181D))) {
+        FolderToolbar(
+            browserMode = browserMode,
+            hasAuthors = hasAuthors,
+            isRefreshing = isRefreshing,
+            onRefresh = onRefresh,
+            onSelectBrowserMode = onSelectBrowserMode,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        CollectionSortToolbar(
+            sortField = collectionSortField,
+            sortDirection = collectionSortDirection,
+            onSelectSortField = onSelectCollectionSortField,
+            onToggleSortDirection = onToggleCollectionSortDirection,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 10.dp, end = 10.dp, bottom = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(collections, key = { it.id }) { collection ->
+                val selected = collection.id == selectedCollectionId
+                val rowBackground by animateColorAsState(
+                    targetValue = if (selected) Color(0xFF25313A) else Color.Transparent,
+                    animationSpec = tween(ViewerUiSpec.SELECTION_TRANSITION_DURATION_MILLIS),
+                    label = "folder_selection_background",
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(rowBackground)
+                        .clickable { onSelectCollection(collection.id) }
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AsyncImage(
+                        model = mediaImageModel(collection.previewItem),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFF252A33)),
+                        contentScale = ContentScale.Crop,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            collection.name,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                        Text(
+                            "${collection.count}",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderToolbar(
+    browserMode: BrowserMode,
+    hasAuthors: Boolean,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    onSelectBrowserMode: (BrowserMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .height(56.dp)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        BrowserModeButton(
+            text = "文件夹",
+            selected = browserMode == BrowserMode.Folder,
+            enabled = true,
+            onClick = { onSelectBrowserMode(BrowserMode.Folder) },
+        )
+        BrowserModeButton(
+            text = "作者",
+            selected = browserMode == BrowserMode.Author,
+            enabled = hasAuthors,
+            onClick = { onSelectBrowserMode(BrowserMode.Author) },
+        )
+        Text(
+            if (isRefreshing) "刷新" else "刷新",
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF20242C))
+                .clickable(enabled = !isRefreshing) { onRefresh() }
+                .padding(horizontal = 9.dp, vertical = 7.dp),
+            color = if (isRefreshing) MaterialTheme.colorScheme.onSurfaceVariant else Color.White,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        AnimatedVisibility(
+            visible = isRefreshing,
+            enter = fadeIn(animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS)),
+            exit = fadeOut(animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS)),
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary,
             )
         }
     }
 }
 
 @Composable
-private fun FolderRail(
-    folders: List<MediaFolder>,
-    selectedFolderId: String?,
-    onSelectFolder: (String) -> Unit,
-    modifier: Modifier = Modifier,
+private fun BrowserModeButton(
+    text: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
 ) {
-    LazyColumn(
-        modifier = modifier.background(Color(0xFF15181D)),
-        contentPadding = PaddingValues(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        items(folders, key = { it.id }) { folder ->
-            val selected = folder.id == selectedFolderId
-            val rowBackground by animateColorAsState(
-                targetValue = if (selected) Color(0xFF25313A) else Color.Transparent,
-                animationSpec = tween(ViewerUiSpec.SELECTION_TRANSITION_DURATION_MILLIS),
-                label = "folder_selection_background",
-            )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(rowBackground)
-                    .clickable { onSelectFolder(folder.id) }
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AsyncImage(
-                    model = mediaImageModel(folder.previewItem),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color(0xFF252A33)),
-                    contentScale = ContentScale.Crop,
-                )
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        folder.name,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                    )
-                    Text(
-                        "${folder.count}",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-        }
-    }
+    val background by animateColorAsState(
+        targetValue = if (selected) MaterialTheme.colorScheme.primary else Color(0xFF20242C),
+        animationSpec = tween(ViewerUiSpec.SELECTION_TRANSITION_DURATION_MILLIS),
+        label = "browser_mode_background",
+    )
+    Text(
+        text,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(background)
+            .clickable(enabled = enabled && !selected) { onClick() }
+            .padding(horizontal = 8.dp, vertical = 7.dp),
+        color = when {
+            !enabled -> MaterialTheme.colorScheme.onSurfaceVariant
+            selected -> Color(0xFF06120B)
+            else -> Color.White
+        },
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.SemiBold,
+    )
 }
 
 @Composable
