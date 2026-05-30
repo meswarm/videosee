@@ -11,11 +11,13 @@ enum class CollectionSortField {
     Name,
     Count,
     ModifiedTime,
+    FavoriteLevel,
 }
 
 enum class MediaSortField {
     Name,
     ModifiedTime,
+    FavoriteLevel,
 }
 
 object MediaSort {
@@ -28,6 +30,8 @@ object MediaSort {
             CollectionSortField.Name -> compareBy<MediaFolder> { it.name.lowercase(Locale.ROOT) }
             CollectionSortField.Count -> compareBy { it.count }
             CollectionSortField.ModifiedTime -> compareBy { it.newestDateModifiedSeconds }
+            CollectionSortField.FavoriteLevel -> compareBy<MediaFolder> { it.favoriteLevel }
+                .thenBy { it.name.lowercase(Locale.ROOT) }
         }
         return collections.sortedWith(comparator.oriented(direction))
     }
@@ -40,6 +44,8 @@ object MediaSort {
         val comparator = when (field) {
             MediaSortField.Name -> compareBy<MediaItem> { it.displayName.lowercase(Locale.ROOT) }
             MediaSortField.ModifiedTime -> compareBy { it.dateModifiedSeconds }
+            MediaSortField.FavoriteLevel -> compareBy<MediaItem> { it.favoriteLevel }
+                .thenBy { it.displayName.lowercase(Locale.ROOT) }
         }
         return items.sortedWith(comparator.oriented(direction))
     }

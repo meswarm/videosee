@@ -1,6 +1,9 @@
 package app.videosee
 
 import android.Manifest
+import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
@@ -14,6 +17,7 @@ import android.view.LayoutInflater
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -30,8 +34,11 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -65,6 +72,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -81,7 +89,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.positionChange
@@ -108,6 +121,7 @@ import app.videosee.domain.MediaType
 import app.videosee.domain.CollectionSortField
 import app.videosee.domain.MediaSortField
 import app.videosee.domain.SortDirection
+import app.videosee.data.SyncPendingFile
 import app.videosee.ui.PlaybackSpeedOptions
 import app.videosee.ui.PlaybackTimeFormatter
 import app.videosee.ui.SwipeIntent
@@ -155,11 +169,75 @@ private fun VideoSeeTheme(content: @Composable () -> Unit) {
 @Composable
 private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val state by viewModel.uiState.collectAsState()
+    var selectedMediaUrisForDelete by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var pendingDeleteUris by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var pendingViewerDeleteTargetUri by remember { mutableStateOf<String?>(null) }
     val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) {
         viewModel.onPermissionChanged(context.hasMediaPermission())
+    }
+    val deleteLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            Toast.makeText(context, "已删除 ${pendingDeleteUris.size} 个媒体", Toast.LENGTH_SHORT).show()
+            selectedMediaUrisForDelete = emptySet()
+            val targetUri = pendingViewerDeleteTargetUri
+            if (targetUri != null) {
+                viewModel.refreshKeepingViewer(targetUri)
+            } else {
+                viewModel.refresh()
+            }
+        }
+        pendingDeleteUris = emptySet()
+        pendingViewerDeleteTargetUri = null
+    }
+    val exportLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        coroutineScope.launch {
+            runCatching {
+                val json = viewModel.exportFavoritesBackupJson()
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)
+                        ?.bufferedWriter()
+                        ?.use { it.write(json) }
+                        ?: error("Cannot open backup file")
+                }
+            }.onSuccess {
+                Toast.makeText(context, "爱心数据已导出", Toast.LENGTH_SHORT).show()
+            }.onFailure { error ->
+                Toast.makeText(context, "导出失败: ${error.localizedMessage}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        coroutineScope.launch {
+            runCatching {
+                val json = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)
+                        ?.bufferedReader()
+                        ?.use { it.readText() }
+                        ?: error("Cannot open backup file")
+                }
+                viewModel.importFavoritesBackupJson(json)
+            }.onSuccess { result ->
+                Toast.makeText(
+                    context,
+                    "已导入: 作者 ${result.authorCount}, 媒体 ${result.mediaCount}",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }.onFailure { error ->
+                Toast.makeText(context, "导入失败: ${error.localizedMessage}", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -178,13 +256,77 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
         onSelectBrowserMode = viewModel::selectBrowserMode,
         onSelectCollectionSortField = viewModel::selectCollectionSortField,
         onToggleCollectionSortDirection = viewModel::toggleCollectionSortDirection,
+        onSetAuthorFavoriteLevel = viewModel::setAuthorFavoriteLevel,
         onSelectMediaSortField = viewModel::selectMediaSortField,
         onToggleMediaSortDirection = viewModel::toggleMediaSortDirection,
+        onSetMediaFavoriteLevel = viewModel::setMediaFavoriteLevel,
         onOpenItem = viewModel::openViewer,
         onCloseViewer = viewModel::closeViewer,
         onNext = viewModel::showNext,
         onPrevious = viewModel::showPrevious,
+        onFirst = viewModel::showFirst,
+        onLast = viewModel::showLast,
         onRefresh = viewModel::refresh,
+        onOpenSync = viewModel::openSyncPane,
+        onSyncHostChange = viewModel::updateSyncHost,
+        onSyncPortChange = viewModel::updateSyncPort,
+        onSyncTokenChange = viewModel::updateSyncToken,
+        onSyncDeviceIdChange = viewModel::updateSyncDeviceId,
+        onLoadSyncPendingFiles = viewModel::loadSyncPendingFiles,
+        onDownloadSyncFile = viewModel::downloadSyncFile,
+        onDownloadAllSyncFiles = viewModel::downloadAllSyncFiles,
+        selectedMediaUrisForDelete = selectedMediaUrisForDelete,
+        onSelectedMediaUrisForDeleteChange = { selectedMediaUrisForDelete = it },
+        onDeleteMediaUris = { uris ->
+            if (uris.isEmpty()) return@VideoSeeApp
+            pendingViewerDeleteTargetUri = null
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                pendingDeleteUris = uris
+                val request = MediaStore.createDeleteRequest(
+                    context.contentResolver,
+                    uris.map { Uri.parse(it) },
+                )
+                deleteLauncher.launch(IntentSenderRequest.Builder(request.intentSender).build())
+            } else {
+                coroutineScope.launch {
+                    val deleted = withContext(Dispatchers.IO) {
+                        uris.count { context.contentResolver.delete(Uri.parse(it), null, null) > 0 }
+                    }
+                    Toast.makeText(context, "已删除 $deleted 个媒体", Toast.LENGTH_SHORT).show()
+                    pendingDeleteUris = emptySet()
+                    selectedMediaUrisForDelete = emptySet()
+                    viewModel.refresh()
+                }
+            }
+        },
+        onDeleteViewerMedia = { uri, targetUri ->
+            pendingViewerDeleteTargetUri = targetUri
+            val uris = setOf(uri)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                pendingDeleteUris = uris
+                val request = MediaStore.createDeleteRequest(
+                    context.contentResolver,
+                    uris.map { Uri.parse(it) },
+                )
+                deleteLauncher.launch(IntentSenderRequest.Builder(request.intentSender).build())
+            } else {
+                coroutineScope.launch {
+                    val deleted = withContext(Dispatchers.IO) {
+                        context.contentResolver.delete(Uri.parse(uri), null, null)
+                    }
+                    Toast.makeText(context, "已删除 $deleted 个媒体", Toast.LENGTH_SHORT).show()
+                    pendingDeleteUris = emptySet()
+                    pendingViewerDeleteTargetUri = null
+                    viewModel.refreshKeepingViewer(targetUri)
+                }
+            }
+        },
+        onExportFavorites = {
+            exportLauncher.launch("videosee-favorites-backup.json")
+        },
+        onImportFavorites = {
+            importLauncher.launch(arrayOf("application/json", "text/*", "application/octet-stream"))
+        },
     )
 }
 
@@ -197,13 +339,31 @@ private fun VideoSeeApp(
     onSelectBrowserMode: (BrowserMode) -> Unit,
     onSelectCollectionSortField: (CollectionSortField) -> Unit,
     onToggleCollectionSortDirection: () -> Unit,
+    onSetAuthorFavoriteLevel: (String, Int) -> Unit,
     onSelectMediaSortField: (MediaSortField) -> Unit,
     onToggleMediaSortDirection: () -> Unit,
+    onSetMediaFavoriteLevel: (String, Int) -> Unit,
     onOpenItem: (MediaItem) -> Unit,
     onCloseViewer: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    onFirst: () -> Unit,
+    onLast: () -> Unit,
     onRefresh: () -> Unit,
+    onOpenSync: () -> Unit,
+    onSyncHostChange: (String) -> Unit,
+    onSyncPortChange: (String) -> Unit,
+    onSyncTokenChange: (String) -> Unit,
+    onSyncDeviceIdChange: (String) -> Unit,
+    onLoadSyncPendingFiles: () -> Unit,
+    onDownloadSyncFile: (SyncPendingFile) -> Unit,
+    onDownloadAllSyncFiles: () -> Unit,
+    selectedMediaUrisForDelete: Set<String>,
+    onSelectedMediaUrisForDeleteChange: (Set<String>) -> Unit,
+    onDeleteMediaUris: (Set<String>) -> Unit,
+    onDeleteViewerMedia: (String, String?) -> Unit,
+    onExportFavorites: () -> Unit,
+    onImportFavorites: () -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -232,16 +392,31 @@ private fun VideoSeeApp(
                     onSelectBrowserMode = onSelectBrowserMode,
                     onSelectCollectionSortField = onSelectCollectionSortField,
                     onToggleCollectionSortDirection = onToggleCollectionSortDirection,
+                    onSetAuthorFavoriteLevel = onSetAuthorFavoriteLevel,
                     onSelectMediaSortField = onSelectMediaSortField,
                     onToggleMediaSortDirection = onToggleMediaSortDirection,
+                    onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
                     onOpenItem = onOpenItem,
                     onRefresh = onRefresh,
+                    onOpenSync = onOpenSync,
+                    onSyncHostChange = onSyncHostChange,
+                    onSyncPortChange = onSyncPortChange,
+                    onSyncTokenChange = onSyncTokenChange,
+                    onSyncDeviceIdChange = onSyncDeviceIdChange,
+                    onLoadSyncPendingFiles = onLoadSyncPendingFiles,
+                    onDownloadSyncFile = onDownloadSyncFile,
+                    onDownloadAllSyncFiles = onDownloadAllSyncFiles,
+                    selectedMediaUrisForDelete = selectedMediaUrisForDelete,
+                    onSelectedMediaUrisForDeleteChange = onSelectedMediaUrisForDeleteChange,
+                    onDeleteMediaUris = onDeleteMediaUris,
+                    onExportFavorites = onExportFavorites,
+                    onImportFavorites = onImportFavorites,
                 )
             }
         }
 
         AnimatedContent(
-            targetState = state.viewerItem,
+            targetState = state.viewerItem?.uri,
             transitionSpec = {
                 (fadeIn(animationSpec = tween(ViewerUiSpec.VIEWER_TRANSITION_DURATION_MILLIS)) +
                     scaleIn(
@@ -257,16 +432,23 @@ private fun VideoSeeApp(
                     )
             },
             label = "viewer_transition",
-        ) { item ->
-            item?.let {
-                val viewerIndex = state.selectedItems.indexOfFirst { media -> media.uri == it.uri }
+        ) { itemUri ->
+            itemUri?.let { uri ->
+                val item = state.selectedItems.firstOrNull { media -> media.uri == uri } ?: return@let
+                val viewerIndex = state.selectedItems.indexOfFirst { media -> media.uri == uri }
+                val viewerDeleteTargetUri = state.selectedItems.getOrNull(viewerIndex + 1)?.uri
+                    ?: state.selectedItems.getOrNull(viewerIndex - 1)?.uri
                 MediaViewer(
-                    item = it,
+                    item = item,
                     hasPrevious = viewerIndex > 0,
                     hasNext = viewerIndex >= 0 && viewerIndex < state.selectedItems.lastIndex,
                     onClose = onCloseViewer,
                     onNext = onNext,
                     onPrevious = onPrevious,
+                    onFirst = onFirst,
+                    onLast = onLast,
+                    onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
+                    onDeleteCurrentMedia = { onDeleteViewerMedia(item.uri, viewerDeleteTargetUri) },
                 )
             }
         }
@@ -322,10 +504,25 @@ private fun BrowserScreen(
     onSelectBrowserMode: (BrowserMode) -> Unit,
     onSelectCollectionSortField: (CollectionSortField) -> Unit,
     onToggleCollectionSortDirection: () -> Unit,
+    onSetAuthorFavoriteLevel: (String, Int) -> Unit,
     onSelectMediaSortField: (MediaSortField) -> Unit,
     onToggleMediaSortDirection: () -> Unit,
+    onSetMediaFavoriteLevel: (String, Int) -> Unit,
     onOpenItem: (MediaItem) -> Unit,
     onRefresh: () -> Unit,
+    onOpenSync: () -> Unit,
+    onSyncHostChange: (String) -> Unit,
+    onSyncPortChange: (String) -> Unit,
+    onSyncTokenChange: (String) -> Unit,
+    onSyncDeviceIdChange: (String) -> Unit,
+    onLoadSyncPendingFiles: () -> Unit,
+    onDownloadSyncFile: (SyncPendingFile) -> Unit,
+    onDownloadAllSyncFiles: () -> Unit,
+    selectedMediaUrisForDelete: Set<String>,
+    onSelectedMediaUrisForDeleteChange: (Set<String>) -> Unit,
+    onDeleteMediaUris: (Set<String>) -> Unit,
+    onExportFavorites: () -> Unit,
+    onImportFavorites: () -> Unit,
 ) {
     val collections = state.visibleCollections
     val selectedCollection = state.selectedCollection
@@ -347,8 +544,12 @@ private fun BrowserScreen(
             collectionSortDirection = state.collectionSortDirection,
             onSelectCollectionSortField = onSelectCollectionSortField,
             onToggleCollectionSortDirection = onToggleCollectionSortDirection,
+            onSetAuthorFavoriteLevel = onSetAuthorFavoriteLevel,
             onSelectCollection = onSelectCollection,
-            modifier = Modifier.width(172.dp).fillMaxHeight(),
+            onOpenSync = onOpenSync,
+            onExportFavorites = onExportFavorites,
+            onImportFavorites = onImportFavorites,
+            modifier = Modifier.width(214.dp).fillMaxHeight(),
         )
         Box(
             Modifier
@@ -357,27 +558,61 @@ private fun BrowserScreen(
                 .background(Color(0xFF252A33)),
         )
         Crossfade(
-            targetState = selectedCollection,
+            targetState = state.rightPaneMode to selectedCollection,
             modifier = Modifier.weight(1f).fillMaxHeight(),
             animationSpec = tween(ViewerUiSpec.FOLDER_SWITCH_DURATION_MILLIS),
             label = "media_collection_switch",
-        ) { collection ->
-            if (collection == null) {
-                EmptyScreen("No media found")
-            } else {
-                Column(Modifier.fillMaxHeight()) {
-                    MediaSortToolbar(
-                        sortField = state.mediaSortField,
-                        sortDirection = state.mediaSortDirection,
-                        onSelectSortField = onSelectMediaSortField,
-                        onToggleSortDirection = onToggleMediaSortDirection,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    MediaGrid(
-                        items = state.selectedItems,
-                        onOpenItem = onOpenItem,
-                        modifier = Modifier.weight(1f),
-                    )
+        ) { (rightPaneMode, collection) ->
+            when (rightPaneMode) {
+                RightPaneMode.Sync -> SyncScreen(
+                    host = state.syncHost,
+                    port = state.syncPort,
+                    token = state.syncToken,
+                    deviceId = state.syncDeviceId,
+                    pendingFiles = state.syncPendingFiles,
+                    downloadingIds = state.syncDownloadingIds,
+                    isLoading = state.syncIsLoading,
+                    message = state.syncMessage,
+                    onHostChange = onSyncHostChange,
+                    onPortChange = onSyncPortChange,
+                    onTokenChange = onSyncTokenChange,
+                    onDeviceIdChange = onSyncDeviceIdChange,
+                    onRefresh = onLoadSyncPendingFiles,
+                    onDownload = onDownloadSyncFile,
+                    onDownloadAll = onDownloadAllSyncFiles,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                RightPaneMode.Browser -> if (collection == null) {
+                    EmptyScreen("No media found")
+                } else {
+                    Column(Modifier.fillMaxHeight()) {
+                        Box(Modifier.fillMaxWidth()) {
+                            MediaSortToolbar(
+                                sortField = state.mediaSortField,
+                                sortDirection = state.mediaSortDirection,
+                                onSelectSortField = onSelectMediaSortField,
+                                onToggleSortDirection = onToggleMediaSortDirection,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            if (selectedMediaUrisForDelete.isNotEmpty()) {
+                                DeleteSelectedButton(
+                                    count = selectedMediaUrisForDelete.size,
+                                    onClick = { onDeleteMediaUris(selectedMediaUrisForDelete) },
+                                    modifier = Modifier
+                                        .align(Alignment.CenterEnd)
+                                        .padding(end = 10.dp),
+                                )
+                            }
+                        }
+                        MediaGrid(
+                            items = state.selectedItems,
+                            onOpenItem = onOpenItem,
+                            onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
+                            selectedMediaUrisForDelete = selectedMediaUrisForDelete,
+                            onSelectedMediaUrisForDeleteChange = onSelectedMediaUrisForDeleteChange,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                 }
             }
         }
@@ -410,6 +645,11 @@ private fun MediaSortToolbar(
             onClick = { onSelectSortField(MediaSortField.ModifiedTime) },
         )
         SortChip(
+            text = "爱心",
+            selected = sortField == MediaSortField.FavoriteLevel,
+            onClick = { onSelectSortField(MediaSortField.FavoriteLevel) },
+        )
+        SortChip(
             text = sortDirection.label(),
             selected = true,
             onClick = onToggleSortDirection,
@@ -418,7 +658,28 @@ private fun MediaSortToolbar(
 }
 
 @Composable
+private fun DeleteSelectedButton(
+    count: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        "删除 $count",
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFFD93025))
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        color = Color.White,
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+    )
+}
+
+@Composable
 private fun CollectionSortToolbar(
+    browserMode: BrowserMode,
     sortField: CollectionSortField,
     sortDirection: SortDirection,
     onSelectSortField: (CollectionSortField) -> Unit,
@@ -427,40 +688,43 @@ private fun CollectionSortToolbar(
 ) {
     Row(
         modifier = modifier
-            .height(74.dp)
-            .padding(start = 10.dp, end = 10.dp, bottom = 8.dp),
+            .height(48.dp)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                SortChip(
-                    text = "名称",
-                    selected = sortField == CollectionSortField.Name,
-                    onClick = { onSelectSortField(CollectionSortField.Name) },
-                    compact = true,
-                )
-                SortChip(
-                    text = "数量",
-                    selected = sortField == CollectionSortField.Count,
-                    onClick = { onSelectSortField(CollectionSortField.Count) },
-                    compact = true,
-                )
-                SortChip(
-                    text = "最新",
-                    selected = sortField == CollectionSortField.ModifiedTime,
-                    onClick = { onSelectSortField(CollectionSortField.ModifiedTime) },
-                    compact = true,
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                SortChip(
-                    text = sortDirection.label(),
-                    selected = true,
-                    onClick = onToggleSortDirection,
-                    compact = true,
-                )
-            }
+        SortChip(
+            text = "名称",
+            selected = sortField == CollectionSortField.Name,
+            onClick = { onSelectSortField(CollectionSortField.Name) },
+            compact = true,
+        )
+        SortChip(
+            text = "数量",
+            selected = sortField == CollectionSortField.Count,
+            onClick = { onSelectSortField(CollectionSortField.Count) },
+            compact = true,
+        )
+        SortChip(
+            text = "最新",
+            selected = sortField == CollectionSortField.ModifiedTime,
+            onClick = { onSelectSortField(CollectionSortField.ModifiedTime) },
+            compact = true,
+        )
+        if (browserMode == BrowserMode.Author) {
+            SortChip(
+                text = "爱心",
+                selected = sortField == CollectionSortField.FavoriteLevel,
+                onClick = { onSelectSortField(CollectionSortField.FavoriteLevel) },
+                compact = true,
+            )
         }
+        SortChip(
+            text = sortDirection.label(),
+            selected = true,
+            onClick = onToggleSortDirection,
+            compact = true,
+        )
     }
 }
 
@@ -482,7 +746,7 @@ private fun SortChip(
             .clip(RoundedCornerShape(8.dp))
             .background(background)
             .clickable { onClick() }
-            .padding(horizontal = if (compact) 6.dp else 8.dp, vertical = 6.dp),
+            .padding(horizontal = if (compact) 5.dp else 8.dp, vertical = 6.dp),
         color = if (selected) Color(0xFF1A0D00) else Color.White,
         style = MaterialTheme.typography.bodySmall,
         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
@@ -510,10 +774,21 @@ private fun FolderRail(
     collectionSortDirection: SortDirection,
     onSelectCollectionSortField: (CollectionSortField) -> Unit,
     onToggleCollectionSortDirection: () -> Unit,
+    onSetAuthorFavoriteLevel: (String, Int) -> Unit,
     onSelectCollection: (String) -> Unit,
+    onOpenSync: () -> Unit,
+    onExportFavorites: () -> Unit,
+    onImportFavorites: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.background(Color(0xFF15181D))) {
+        FavoritesBackupToolbar(
+            onExportFavorites = onExportFavorites,
+            onImportFavorites = onImportFavorites,
+            onOpenSync = onOpenSync,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        RailDivider()
         FolderToolbar(
             browserMode = browserMode,
             hasAuthors = hasAuthors,
@@ -522,13 +797,16 @@ private fun FolderRail(
             onSelectBrowserMode = onSelectBrowserMode,
             modifier = Modifier.fillMaxWidth(),
         )
+        RailDivider()
         CollectionSortToolbar(
+            browserMode = browserMode,
             sortField = collectionSortField,
             sortDirection = collectionSortDirection,
             onSelectSortField = onSelectCollectionSortField,
             onToggleSortDirection = onToggleCollectionSortDirection,
             modifier = Modifier.fillMaxWidth(),
         )
+        RailDivider()
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 10.dp, end = 10.dp, bottom = 10.dp),
@@ -567,16 +845,192 @@ private fun FolderRail(
                             overflow = TextOverflow.Ellipsis,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                         )
-                        Text(
-                            "${collection.count}",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "${collection.count}",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            if (browserMode == BrowserMode.Author) {
+                                Spacer(Modifier.weight(1f))
+                                AuthorFavoritePicker(
+                                    favoriteLevel = collection.favoriteLevel,
+                                    onFavoriteLevelChange = { level ->
+                                        onSetAuthorFavoriteLevel(collection.id, level)
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun RailDivider() {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(Color(0xFF252A33)),
+    )
+}
+
+@Composable
+private fun FavoritesBackupToolbar(
+    onExportFavorites: () -> Unit,
+    onImportFavorites: () -> Unit,
+    onOpenSync: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .height(48.dp)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        SortChip(
+            text = "导出爱心",
+            selected = false,
+            onClick = onExportFavorites,
+            compact = true,
+        )
+        SortChip(
+            text = "导入爱心",
+            selected = false,
+            onClick = onImportFavorites,
+            compact = true,
+        )
+        SortChip(
+            text = "同步",
+            selected = false,
+            onClick = onOpenSync,
+            compact = true,
+        )
+    }
+}
+
+@Composable
+private fun AuthorFavoritePicker(
+    favoriteLevel: Int,
+    onFavoriteLevelChange: (Int) -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        repeat(3) { index ->
+            val level = index + 1
+            val selected = level <= favoriteLevel
+            HeartButton(
+                selected = selected,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable {
+                        onFavoriteLevelChange(if (favoriteLevel == level) 0 else level)
+                    }
+                    .padding(horizontal = 2.dp, vertical = 1.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun HeartButton(
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(14.dp)) {
+        val path = Path().apply {
+            moveTo(size.width * 0.5f, size.height * 0.88f)
+            cubicTo(
+                size.width * 0.16f,
+                size.height * 0.62f,
+                size.width * 0.04f,
+                size.height * 0.42f,
+                size.width * 0.08f,
+                size.height * 0.24f,
+            )
+            cubicTo(
+                size.width * 0.12f,
+                size.height * 0.06f,
+                size.width * 0.34f,
+                size.height * 0.02f,
+                size.width * 0.5f,
+                size.height * 0.22f,
+            )
+            cubicTo(
+                size.width * 0.66f,
+                size.height * 0.02f,
+                size.width * 0.88f,
+                size.height * 0.06f,
+                size.width * 0.92f,
+                size.height * 0.24f,
+            )
+            cubicTo(
+                size.width * 0.96f,
+                size.height * 0.42f,
+                size.width * 0.84f,
+                size.height * 0.62f,
+                size.width * 0.5f,
+                size.height * 0.88f,
+            )
+            close()
+        }
+        if (selected) {
+            drawPath(path = path, color = Color(0xFFFF3446), style = Fill)
+        } else {
+            drawPath(
+                path = path,
+                color = Color(0xFFAEB4BD),
+                style = Stroke(
+                    width = 1.5.dp.toPx(),
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round,
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ViewerFavoritePicker(
+    favoriteLevel: Int,
+    onFavoriteLevelChange: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0x88000000))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+    ) {
+        AuthorFavoritePicker(
+            favoriteLevel = favoriteLevel,
+            onFavoriteLevelChange = onFavoriteLevelChange,
+        )
+    }
+}
+
+@Composable
+private fun ViewerDeleteButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        "删除",
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0x99D93025))
+            .clickable { onClick() }
+            .padding(horizontal = 13.dp, vertical = 8.dp),
+        color = Color.White,
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.SemiBold,
+    )
 }
 
 @Composable
@@ -662,11 +1116,160 @@ private fun BrowserModeButton(
 }
 
 @Composable
+private fun SyncScreen(
+    host: String,
+    port: String,
+    token: String,
+    deviceId: String,
+    pendingFiles: List<SyncPendingFile>,
+    downloadingIds: Set<String>,
+    isLoading: Boolean,
+    message: String?,
+    onHostChange: (String) -> Unit,
+    onPortChange: (String) -> Unit,
+    onTokenChange: (String) -> Unit,
+    onDeviceIdChange: (String) -> Unit,
+    onRefresh: () -> Unit,
+    onDownload: (SyncPendingFile) -> Unit,
+    onDownloadAll: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .background(Color(0xFF111317))
+            .padding(14.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "同步",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            SortChip(
+                text = if (isLoading) "刷新中" else "刷新",
+                selected = true,
+                onClick = onRefresh,
+            )
+            SortChip(
+                text = "全部下载",
+                selected = true,
+                onClick = onDownloadAll,
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextField(
+                value = host,
+                onValueChange = onHostChange,
+                modifier = Modifier.weight(1f),
+                label = { Text("IP") },
+                singleLine = true,
+            )
+            TextField(
+                value = port,
+                onValueChange = onPortChange,
+                modifier = Modifier.weight(0.45f),
+                label = { Text("端口") },
+                singleLine = true,
+            )
+            TextField(
+                value = deviceId,
+                onValueChange = onDeviceIdChange,
+                modifier = Modifier.weight(0.8f),
+                label = { Text("设备名") },
+                singleLine = true,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        TextField(
+            value = token,
+            onValueChange = onTokenChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("SYNC_TOKEN") },
+            singleLine = true,
+        )
+        if (message != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.height(12.dp))
+        if (isLoading) {
+            Box(Modifier.fillMaxWidth().padding(18.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else if (pendingFiles.isEmpty()) {
+            EmptyScreen("没有待同步文件")
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(pendingFiles, key = { it.id }) { file ->
+                    SyncFileRow(
+                        file = file,
+                        isDownloading = file.id in downloadingIds,
+                        onDownload = { onDownload(file) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncFileRow(
+    file: SyncPendingFile,
+    isDownloading: Boolean,
+    onDownload: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF20242C))
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                file.filename,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "${file.mediaType} · ${file.sizeBytes.formatBytes()} · ${file.downloadedAt}",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        SortChip(
+            text = if (isDownloading) "下载中" else "下载",
+            selected = true,
+            onClick = {
+                if (!isDownloading) onDownload()
+            },
+        )
+    }
+}
+
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun MediaGrid(
     items: List<MediaItem>,
     onOpenItem: (MediaItem) -> Unit,
+    onSetMediaFavoriteLevel: (String, Int) -> Unit,
+    selectedMediaUrisForDelete: Set<String>,
+    onSelectedMediaUrisForDeleteChange: (Set<String>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val deleteSelectionMode = selectedMediaUrisForDelete.isNotEmpty()
     LazyVerticalGrid(
         columns = GridCells.Adaptive(124.dp),
         modifier = modifier.padding(10.dp),
@@ -675,12 +1278,30 @@ private fun MediaGrid(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(items, key = { it.uri }) { item ->
+            val selectedForDelete = item.uri in selectedMediaUrisForDelete
             Box(
                 modifier = Modifier
                     .aspectRatio(1f)
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color(0xFF20242C))
-                    .clickable { onOpenItem(item) },
+                    .combinedClickable(
+                        onClick = {
+                            if (deleteSelectionMode) {
+                                onSelectedMediaUrisForDeleteChange(
+                                    if (selectedForDelete) {
+                                        selectedMediaUrisForDelete - item.uri
+                                    } else {
+                                        selectedMediaUrisForDelete + item.uri
+                                    },
+                                )
+                            } else {
+                                onOpenItem(item)
+                            }
+                        },
+                        onLongClick = {
+                            onSelectedMediaUrisForDeleteChange(selectedMediaUrisForDelete + item.uri)
+                        },
+                    ),
             ) {
                 AsyncImage(
                     model = mediaImageModel(item),
@@ -698,8 +1319,50 @@ private fun MediaGrid(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .background(Color(0x99000000))
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                ) {
+                    AuthorFavoritePicker(
+                        favoriteLevel = item.favoriteLevel,
+                        onFavoriteLevelChange = { level ->
+                            onSetMediaFavoriteLevel(item.uri, level)
+                        },
+                    )
+                }
+                if (deleteSelectionMode) {
+                    DeleteSelectionCheckbox(
+                        selected = selectedForDelete,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(7.dp),
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun DeleteSelectionCheckbox(
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .size(22.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (selected) Color(0xFFD93025) else Color(0xCC111317)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            if (selected) "✓" else "",
+            color = Color.White,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Bold,
+        )
     }
 }
 
@@ -711,6 +1374,10 @@ private fun MediaViewer(
     onClose: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    onFirst: () -> Unit,
+    onLast: () -> Unit,
+    onSetMediaFavoriteLevel: (String, Int) -> Unit,
+    onDeleteCurrentMedia: () -> Unit,
 ) {
     var scale by remember(item.uri) { mutableFloatStateOf(1f) }
     var offsetX by remember(item.uri) { mutableFloatStateOf(0f) }
@@ -719,6 +1386,8 @@ private fun MediaViewer(
     val settleOffsetY = remember(item.uri) { Animatable(0f) }
     var settleRequest by remember(item.uri) { mutableStateOf<SwipeSettleRequest?>(null) }
     var settleSerial by remember(item.uri) { mutableStateOf(0) }
+    var armedBoundaryIntent by remember { mutableStateOf<SwipeIntent?>(null) }
+    var boundaryFeedbackText by remember { mutableStateOf<String?>(null) }
     var viewportHeight by remember { mutableFloatStateOf(0f) }
     val visibleSwipeOffsetY = settleRequest?.let { settleOffsetY.value } ?: swipeOffsetY
 
@@ -739,8 +1408,8 @@ private fun MediaViewer(
             ),
         )
         when (request.intent) {
-            SwipeIntent.Next -> onNext()
-            SwipeIntent.Previous -> onPrevious()
+            SwipeIntent.Next -> if (request.wrapAround) onFirst() else onNext()
+            SwipeIntent.Previous -> if (request.wrapAround) onLast() else onPrevious()
             null -> {
                 settleRequest = null
                 swipeOffsetY = 0f
@@ -749,7 +1418,14 @@ private fun MediaViewer(
         }
     }
 
-    Box(
+    LaunchedEffect(boundaryFeedbackText) {
+        if (boundaryFeedbackText != null) {
+            delay(900)
+            boundaryFeedbackText = null
+        }
+    }
+
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
@@ -801,13 +1477,26 @@ private fun MediaViewer(
                     when (intent) {
                         SwipeIntent.Next -> {
                             if (hasNext && viewportHeight > 0f) {
+                                armedBoundaryIntent = null
                                 settleRequest = SwipeSettleRequest(
                                     serial = settleSerial,
                                     startOffsetY = 0f,
                                     targetOffsetY = -viewportHeight,
                                     intent = SwipeIntent.Next,
                                 )
+                            } else if (armedBoundaryIntent == SwipeIntent.Next && viewportHeight > 0f) {
+                                boundaryFeedbackText = null
+                                armedBoundaryIntent = null
+                                settleRequest = SwipeSettleRequest(
+                                    serial = settleSerial,
+                                    startOffsetY = 0f,
+                                    targetOffsetY = -viewportHeight,
+                                    intent = SwipeIntent.Next,
+                                    wrapAround = true,
+                                )
                             } else {
+                                boundaryFeedbackText = "已经是最后一张了"
+                                armedBoundaryIntent = SwipeIntent.Next
                                 settleRequest = SwipeSettleRequest(
                                     serial = settleSerial,
                                     startOffsetY = 0f,
@@ -819,13 +1508,26 @@ private fun MediaViewer(
 
                         SwipeIntent.Previous -> {
                             if (hasPrevious && viewportHeight > 0f) {
+                                armedBoundaryIntent = null
                                 settleRequest = SwipeSettleRequest(
                                     serial = settleSerial,
                                     startOffsetY = 0f,
                                     targetOffsetY = viewportHeight,
                                     intent = SwipeIntent.Previous,
                                 )
+                            } else if (armedBoundaryIntent == SwipeIntent.Previous && viewportHeight > 0f) {
+                                boundaryFeedbackText = null
+                                armedBoundaryIntent = null
+                                settleRequest = SwipeSettleRequest(
+                                    serial = settleSerial,
+                                    startOffsetY = 0f,
+                                    targetOffsetY = viewportHeight,
+                                    intent = SwipeIntent.Previous,
+                                    wrapAround = true,
+                                )
                             } else {
+                                boundaryFeedbackText = "已经是第一张了"
+                                armedBoundaryIntent = SwipeIntent.Previous
                                 settleRequest = SwipeSettleRequest(
                                     serial = settleSerial,
                                     startOffsetY = 0f,
@@ -836,6 +1538,7 @@ private fun MediaViewer(
                         }
 
                         null -> {
+                            armedBoundaryIntent = null
                             settleRequest = SwipeSettleRequest(
                                 serial = settleSerial,
                                 startOffsetY = 0f,
@@ -858,13 +1561,53 @@ private fun MediaViewer(
                 offsetX = offsetX,
                 offsetY = offsetY,
                 activeVideo = true,
+                onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
             )
         }
 
         if (item.mediaType == MediaType.Image) {
+            ViewerFavoritePicker(
+                favoriteLevel = item.favoriteLevel,
+                onFavoriteLevelChange = { level ->
+                    onSetMediaFavoriteLevel(item.uri, level)
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = (maxHeight / 3) - 46.dp),
+            )
             InfoButton(
                 displayName = item.displayName,
                 modifier = Modifier.align(Alignment.BottomEnd),
+            )
+        }
+        ViewerDeleteButton(
+            onClick = onDeleteCurrentMedia,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(end = 16.dp, top = maxHeight / 4),
+        )
+        AnimatedVisibility(
+            visible = boundaryFeedbackText != null,
+            modifier = Modifier.align(Alignment.Center),
+            enter = fadeIn(animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS)) +
+                scaleIn(
+                    animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS),
+                    initialScale = 0.92f,
+                ),
+            exit = fadeOut(animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS)) +
+                scaleOut(
+                    animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS),
+                    targetScale = 0.92f,
+                ),
+        ) {
+            Text(
+                boundaryFeedbackText.orEmpty(),
+                modifier = Modifier
+                    .background(Color(0xAA000000), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 18.dp, vertical = 10.dp),
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
             )
         }
     }
@@ -875,6 +1618,7 @@ private data class SwipeSettleRequest(
     val startOffsetY: Float,
     val targetOffsetY: Float,
     val intent: SwipeIntent?,
+    val wrapAround: Boolean = false,
 )
 
 private const val VideoGestureDoubleTapTimeoutMillis = 280L
@@ -886,6 +1630,7 @@ private fun MediaSurface(
     offsetX: Float,
     offsetY: Float,
     activeVideo: Boolean,
+    onSetMediaFavoriteLevel: (String, Int) -> Unit,
 ) {
     when {
         item.mediaType == MediaType.Video && activeVideo -> VideoPlayer(
@@ -893,6 +1638,7 @@ private fun MediaSurface(
             scale = scale,
             offsetX = offsetX,
             offsetY = offsetY,
+            onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
         )
 
         else -> StableAspectMediaFrame(
@@ -964,6 +1710,7 @@ private fun VideoPlayer(
     scale: Float,
     offsetX: Float,
     offsetY: Float,
+    onSetMediaFavoriteLevel: (String, Int) -> Unit,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -1064,29 +1811,33 @@ private fun VideoPlayer(
                             it.requestLayout()
                             it.invalidate()
                         },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .pointerInput(item.uri) {
-                                detectVideoGestures(
-                                    onTap = { controlsVisible = !controlsVisible },
-                                    onDoubleTap = {
-                                        player.playWhenReady = !player.playWhenReady
-                                        isPaused = !player.playWhenReady
-                                        controlsVisible = true
-                                    },
-                                    onHorizontalSwipe = { seekOffset ->
-                                        val targetPosition = (player.currentPosition + seekOffset)
-                                            .coerceIn(0L, duration.coerceAtLeast(0L))
-                                        player.seekTo(targetPosition)
-                                        currentPosition = targetPosition
-                                        seekFeedbackText = VideoSeekGesture.feedbackText(seekOffset)
-                                    },
-                                )
-                            },
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
             }
         }
+
+        Box(
+            Modifier
+                .fillMaxSize()
+                .pointerInput(item.uri) {
+                    detectVideoGestures(
+                        onTap = { controlsVisible = !controlsVisible },
+                        onDoubleTap = {
+                            player.playWhenReady = !player.playWhenReady
+                            isPaused = !player.playWhenReady
+                            controlsVisible = true
+                        },
+                        onHorizontalSwipe = { seekOffset ->
+                            val targetPosition = (player.currentPosition + seekOffset)
+                                .coerceIn(0L, duration.coerceAtLeast(0L))
+                            player.seekTo(targetPosition)
+                            currentPosition = targetPosition
+                            seekFeedbackText = VideoSeekGesture.feedbackText(seekOffset)
+                        },
+                    )
+                },
+        )
 
         SnapshotButton(
             isSaving = isSavingSnapshot,
@@ -1113,6 +1864,15 @@ private fun VideoPlayer(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = maxHeight / 3),
+        )
+        ViewerFavoritePicker(
+            favoriteLevel = item.favoriteLevel,
+            onFavoriteLevelChange = { level ->
+                onSetMediaFavoriteLevel(item.uri, level)
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = (maxHeight / 3) - 46.dp),
         )
 
         AnimatedVisibility(
@@ -1325,6 +2085,7 @@ private fun VideoProgressBar(
     onPlaybackSpeedChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     var showInfo by remember(displayName) { mutableStateOf(false) }
     val safeDuration = duration.coerceAtLeast(1L)
     val safePosition = currentPosition.coerceIn(0L, safeDuration)
@@ -1344,6 +2105,7 @@ private fun VideoProgressBar(
                 modifier = Modifier
                     .padding(start = 32.dp, end = 32.dp, bottom = 54.dp)
                     .background(Color(0x99000000), RoundedCornerShape(6.dp))
+                    .clickable { context.copyTextToClipboard("filename", displayName) }
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1497,6 +2259,7 @@ private fun InfoButton(
     displayName: String,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     var showInfo by remember(displayName) { mutableStateOf(false) }
     Box(modifier = modifier.padding(16.dp)) {
         AnimatedVisibility(
@@ -1512,6 +2275,7 @@ private fun InfoButton(
                 modifier = Modifier
                     .padding(bottom = 42.dp)
                     .background(Color(0x99000000), RoundedCornerShape(6.dp))
+                    .clickable { context.copyTextToClipboard("filename", displayName) }
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1568,4 +2332,26 @@ private fun Long?.formatDuration(): String {
     val minutes = totalSeconds / 60L
     val seconds = totalSeconds % 60L
     return "%d:%02d".format(minutes, seconds)
+}
+
+private fun Long.formatBytes(): String {
+    if (this <= 0L) return "-"
+    val units = listOf("B", "KB", "MB", "GB")
+    var value = toDouble()
+    var unitIndex = 0
+    while (value >= 1024.0 && unitIndex < units.lastIndex) {
+        value /= 1024.0
+        unitIndex += 1
+    }
+    return if (unitIndex == 0) {
+        "${value.toLong()} ${units[unitIndex]}"
+    } else {
+        "%.1f %s".format(value, units[unitIndex])
+    }
+}
+
+private fun Context.copyTextToClipboard(label: String, text: String) {
+    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+    Toast.makeText(this, "文件名已复制", Toast.LENGTH_SHORT).show()
 }

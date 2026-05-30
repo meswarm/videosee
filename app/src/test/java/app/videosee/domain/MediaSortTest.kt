@@ -27,6 +27,24 @@ class MediaSortTest {
     }
 
     @Test
+    fun sorts_collections_by_favorite_level() {
+        val collections = listOf(
+            folder(id = "a", name = "Alpha", count = 2, newestDateModifiedSeconds = 20, favoriteLevel = 1),
+            folder(id = "c", name = "Camera", count = 1, newestDateModifiedSeconds = 30, favoriteLevel = 3),
+            folder(id = "b", name = "Beta", count = 5, newestDateModifiedSeconds = 10, favoriteLevel = 2),
+        )
+
+        assertEquals(
+            listOf("Camera", "Beta", "Alpha"),
+            MediaSort.sortCollections(collections, CollectionSortField.FavoriteLevel, SortDirection.Descending).map { it.name },
+        )
+        assertEquals(
+            listOf("Alpha", "Beta", "Camera"),
+            MediaSort.sortCollections(collections, CollectionSortField.FavoriteLevel, SortDirection.Ascending).map { it.name },
+        )
+    }
+
+    @Test
     fun sorts_media_by_name_and_modified_time() {
         val items = listOf(
             item(id = 1, displayName = "b.mp4", dateModifiedSeconds = 20),
@@ -44,11 +62,30 @@ class MediaSortTest {
         )
     }
 
+    @Test
+    fun sorts_media_by_favorite_level() {
+        val items = listOf(
+            item(id = 1, displayName = "a.mp4", dateModifiedSeconds = 20, favoriteLevel = 1),
+            item(id = 3, displayName = "c.mp4", dateModifiedSeconds = 30, favoriteLevel = 3),
+            item(id = 2, displayName = "b.mp4", dateModifiedSeconds = 10, favoriteLevel = 2),
+        )
+
+        assertEquals(
+            listOf("c.mp4", "b.mp4", "a.mp4"),
+            MediaSort.sortItems(items, MediaSortField.FavoriteLevel, SortDirection.Descending).map { it.displayName },
+        )
+        assertEquals(
+            listOf("a.mp4", "b.mp4", "c.mp4"),
+            MediaSort.sortItems(items, MediaSortField.FavoriteLevel, SortDirection.Ascending).map { it.displayName },
+        )
+    }
+
     private fun folder(
         id: String,
         name: String,
         count: Int,
         newestDateModifiedSeconds: Long,
+        favoriteLevel: Int = 0,
     ): MediaFolder {
         return MediaFolder(
             id = id,
@@ -56,6 +93,7 @@ class MediaSortTest {
             count = count,
             previewUri = "content://media/$id",
             newestDateModifiedSeconds = newestDateModifiedSeconds,
+            favoriteLevel = favoriteLevel,
             items = emptyList(),
         )
     }
@@ -64,6 +102,7 @@ class MediaSortTest {
         id: Long,
         displayName: String,
         dateModifiedSeconds: Long,
+        favoriteLevel: Int = 0,
     ): MediaItem {
         return MediaItem(
             id = id,
@@ -74,6 +113,7 @@ class MediaSortTest {
             mediaType = MediaType.Video,
             dateModifiedSeconds = dateModifiedSeconds,
             durationMillis = 1_000,
+            favoriteLevel = favoriteLevel,
         )
     }
 }

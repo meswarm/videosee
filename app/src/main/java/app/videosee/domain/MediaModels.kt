@@ -16,6 +16,7 @@ data class MediaItem(
     val durationMillis: Long?,
     val widthPixels: Int? = null,
     val heightPixels: Int? = null,
+    val favoriteLevel: Int = 0,
 ) {
     val displayAspectRatio: Float?
         get() {
@@ -31,5 +32,6 @@ data class MediaFolder(
     val count: Int,
     val previewUri: String,
     val newestDateModifiedSeconds: Long,
+    val favoriteLevel: Int = 0,
     val items: List<MediaItem>,
 )
