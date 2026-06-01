@@ -80,6 +80,25 @@ class MediaSortTest {
         )
     }
 
+    @Test
+    fun keeps_media_in_stable_uri_order_after_favorite_levels_change() {
+        val items = listOf(
+            item(id = 1, displayName = "a.mp4", dateModifiedSeconds = 20, favoriteLevel = 3),
+            item(id = 3, displayName = "c.mp4", dateModifiedSeconds = 30, favoriteLevel = 1),
+            item(id = 2, displayName = "b.mp4", dateModifiedSeconds = 10, favoriteLevel = 2),
+        )
+
+        assertEquals(
+            listOf("c.mp4", "b.mp4", "a.mp4"),
+            MediaSort.sortItemsByStableUriOrder(
+                items = items,
+                stableUriOrder = listOf("content://media/3", "content://media/2", "content://media/1"),
+                fallbackField = MediaSortField.FavoriteLevel,
+                fallbackDirection = SortDirection.Descending,
+            ).map { it.displayName },
+        )
+    }
+
     private fun folder(
         id: String,
         name: String,

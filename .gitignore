@@ -21,3 +21,7 @@ app/build/
 
 # OS/editor noise
 .DS_Store
+
+# Local icon source files after generated launcher PNGs have been committed
+/new.ico
+/new1.ico

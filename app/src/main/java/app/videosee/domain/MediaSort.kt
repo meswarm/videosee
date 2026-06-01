@@ -50,6 +50,22 @@ object MediaSort {
         return items.sortedWith(comparator.oriented(direction))
     }
 
+    fun sortItemsByStableUriOrder(
+        items: List<MediaItem>,
+        stableUriOrder: List<String>,
+        fallbackField: MediaSortField,
+        fallbackDirection: SortDirection,
+    ): List<MediaItem> {
+        if (stableUriOrder.isEmpty()) {
+            return sortItems(items, fallbackField, fallbackDirection)
+        }
+        val orderByUri = stableUriOrder.withIndex().associate { it.value to it.index }
+        val fallbackItems = sortItems(items, fallbackField, fallbackDirection)
+        return fallbackItems.sortedWith(
+            compareBy<MediaItem> { orderByUri[it.uri] ?: Int.MAX_VALUE },
+        )
+    }
+
     private fun <T> Comparator<T>.oriented(direction: SortDirection): Comparator<T> {
         return when (direction) {
             SortDirection.Ascending -> this

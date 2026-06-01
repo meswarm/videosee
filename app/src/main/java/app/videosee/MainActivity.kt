@@ -20,7 +20,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
@@ -29,7 +28,6 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.animateColorAsState
@@ -37,12 +35,14 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -63,8 +63,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -78,6 +80,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -102,6 +105,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -123,6 +127,7 @@ import app.videosee.domain.MediaSortField
 import app.videosee.domain.SortDirection
 import app.videosee.data.SyncPendingFile
 import app.videosee.ui.PlaybackSpeedOptions
+import app.videosee.ui.GridReturnFocus
 import app.videosee.ui.PlaybackTimeFormatter
 import app.videosee.ui.SwipeIntent
 import app.videosee.ui.SwipeTransitionSpec
@@ -137,6 +142,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
 import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
@@ -174,6 +180,7 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
     var selectedMediaUrisForDelete by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingDeleteUris by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingViewerDeleteTargetUri by remember { mutableStateOf<String?>(null) }
+    var backupTransferKind by remember { mutableStateOf("all") }
     val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) {
@@ -201,7 +208,11 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
         uri ?: return@rememberLauncherForActivityResult
         coroutineScope.launch {
             runCatching {
-                val json = viewModel.exportFavoritesBackupJson()
+                val json = when (backupTransferKind) {
+                    "favorites" -> viewModel.exportFavoritesBackupJson()
+                    "tags" -> viewModel.exportTagsBackupJson()
+                    else -> viewModel.exportAllBackupJson()
+                }
                 withContext(Dispatchers.IO) {
                     context.contentResolver.openOutputStream(uri)
                         ?.bufferedWriter()
@@ -209,7 +220,7 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
                         ?: error("Cannot open backup file")
                 }
             }.onSuccess {
-                Toast.makeText(context, "爱心数据已导出", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "数据已导出", Toast.LENGTH_SHORT).show()
             }.onFailure { error ->
                 Toast.makeText(context, "导出失败: ${error.localizedMessage}", Toast.LENGTH_LONG).show()
             }
@@ -227,11 +238,15 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
                         ?.use { it.readText() }
                         ?: error("Cannot open backup file")
                 }
-                viewModel.importFavoritesBackupJson(json)
+                when (backupTransferKind) {
+                    "favorites" -> viewModel.importFavoritesBackupJson(json)
+                    "tags" -> viewModel.importTagsBackupJson(json)
+                    else -> viewModel.importAllBackupJson(json)
+                }
             }.onSuccess { result ->
                 Toast.makeText(
                     context,
-                    "已导入: 作者 ${result.authorCount}, 媒体 ${result.mediaCount}",
+                    "已导入数据",
                     Toast.LENGTH_LONG,
                 ).show()
             }.onFailure { error ->
@@ -253,13 +268,16 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
         onRequestPermission = { launcher.launch(requiredPermissions()) },
         onSelectFolder = viewModel::selectFolder,
         onSelectAuthor = viewModel::selectAuthor,
+        onSelectTag = viewModel::selectTag,
         onSelectBrowserMode = viewModel::selectBrowserMode,
+        onCollectionSearchQueryChange = viewModel::updateCollectionSearchQuery,
         onSelectCollectionSortField = viewModel::selectCollectionSortField,
         onToggleCollectionSortDirection = viewModel::toggleCollectionSortDirection,
         onSetAuthorFavoriteLevel = viewModel::setAuthorFavoriteLevel,
         onSelectMediaSortField = viewModel::selectMediaSortField,
         onToggleMediaSortDirection = viewModel::toggleMediaSortDirection,
         onSetMediaFavoriteLevel = viewModel::setMediaFavoriteLevel,
+        onEnsureVideoThumbnail = viewModel::ensureVideoThumbnail,
         onOpenItem = viewModel::openViewer,
         onCloseViewer = viewModel::closeViewer,
         onNext = viewModel::showNext,
@@ -268,6 +286,7 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
         onLast = viewModel::showLast,
         onRefresh = viewModel::refresh,
         onOpenSync = viewModel::openSyncPane,
+        onOpenBackup = viewModel::openBackupPane,
         onSyncHostChange = viewModel::updateSyncHost,
         onSyncPortChange = viewModel::updateSyncPort,
         onSyncTokenChange = viewModel::updateSyncToken,
@@ -275,6 +294,10 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
         onLoadSyncPendingFiles = viewModel::loadSyncPendingFiles,
         onDownloadSyncFile = viewModel::downloadSyncFile,
         onDownloadAllSyncFiles = viewModel::downloadAllSyncFiles,
+        onAddTag = viewModel::addTag,
+        onDeleteTag = viewModel::deleteTag,
+        onToggleMediaTag = viewModel::toggleMediaTag,
+        onGridReturnTargetHandled = viewModel::clearGridReturnTarget,
         selectedMediaUrisForDelete = selectedMediaUrisForDelete,
         onSelectedMediaUrisForDeleteChange = { selectedMediaUrisForDelete = it },
         onDeleteMediaUris = { uris ->
@@ -321,10 +344,12 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
                 }
             }
         },
-        onExportFavorites = {
-            exportLauncher.launch("videosee-favorites-backup.json")
+        onExportBackup = { kind ->
+            backupTransferKind = kind
+            exportLauncher.launch("videosee-$kind-backup.json")
         },
-        onImportFavorites = {
+        onImportBackup = { kind ->
+            backupTransferKind = kind
             importLauncher.launch(arrayOf("application/json", "text/*", "application/octet-stream"))
         },
     )
@@ -336,13 +361,16 @@ private fun VideoSeeApp(
     onRequestPermission: () -> Unit,
     onSelectFolder: (String) -> Unit,
     onSelectAuthor: (String) -> Unit,
+    onSelectTag: (String) -> Unit,
     onSelectBrowserMode: (BrowserMode) -> Unit,
+    onCollectionSearchQueryChange: (String) -> Unit,
     onSelectCollectionSortField: (CollectionSortField) -> Unit,
     onToggleCollectionSortDirection: () -> Unit,
     onSetAuthorFavoriteLevel: (String, Int) -> Unit,
     onSelectMediaSortField: (MediaSortField) -> Unit,
     onToggleMediaSortDirection: () -> Unit,
     onSetMediaFavoriteLevel: (String, Int) -> Unit,
+    onEnsureVideoThumbnail: (MediaItem) -> Unit,
     onOpenItem: (MediaItem) -> Unit,
     onCloseViewer: () -> Unit,
     onNext: () -> Unit,
@@ -351,6 +379,7 @@ private fun VideoSeeApp(
     onLast: () -> Unit,
     onRefresh: () -> Unit,
     onOpenSync: () -> Unit,
+    onOpenBackup: () -> Unit,
     onSyncHostChange: (String) -> Unit,
     onSyncPortChange: (String) -> Unit,
     onSyncTokenChange: (String) -> Unit,
@@ -358,12 +387,16 @@ private fun VideoSeeApp(
     onLoadSyncPendingFiles: () -> Unit,
     onDownloadSyncFile: (SyncPendingFile) -> Unit,
     onDownloadAllSyncFiles: () -> Unit,
+    onAddTag: (String) -> Unit,
+    onDeleteTag: (String) -> Unit,
+    onToggleMediaTag: (String, String) -> Unit,
+    onGridReturnTargetHandled: (String) -> Unit,
     selectedMediaUrisForDelete: Set<String>,
     onSelectedMediaUrisForDeleteChange: (Set<String>) -> Unit,
     onDeleteMediaUris: (Set<String>) -> Unit,
     onDeleteViewerMedia: (String, String?) -> Unit,
-    onExportFavorites: () -> Unit,
-    onImportFavorites: () -> Unit,
+    onExportBackup: (String) -> Unit,
+    onImportBackup: (String) -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -387,18 +420,22 @@ private fun VideoSeeApp(
                 AppContentState.Empty -> EmptyScreen("No images or videos found")
                 AppContentState.Browser -> BrowserScreen(
                     state = state,
-                    onSelectFolder = onSelectFolder,
-                    onSelectAuthor = onSelectAuthor,
+            onSelectFolder = onSelectFolder,
+            onSelectAuthor = onSelectAuthor,
+                    onSelectTag = onSelectTag,
                     onSelectBrowserMode = onSelectBrowserMode,
+                    onCollectionSearchQueryChange = onCollectionSearchQueryChange,
                     onSelectCollectionSortField = onSelectCollectionSortField,
                     onToggleCollectionSortDirection = onToggleCollectionSortDirection,
                     onSetAuthorFavoriteLevel = onSetAuthorFavoriteLevel,
                     onSelectMediaSortField = onSelectMediaSortField,
                     onToggleMediaSortDirection = onToggleMediaSortDirection,
                     onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
+                    onEnsureVideoThumbnail = onEnsureVideoThumbnail,
                     onOpenItem = onOpenItem,
                     onRefresh = onRefresh,
                     onOpenSync = onOpenSync,
+                    onOpenBackup = onOpenBackup,
                     onSyncHostChange = onSyncHostChange,
                     onSyncPortChange = onSyncPortChange,
                     onSyncTokenChange = onSyncTokenChange,
@@ -406,51 +443,38 @@ private fun VideoSeeApp(
                     onLoadSyncPendingFiles = onLoadSyncPendingFiles,
                     onDownloadSyncFile = onDownloadSyncFile,
                     onDownloadAllSyncFiles = onDownloadAllSyncFiles,
+                    onAddTag = onAddTag,
+                    onDeleteTag = onDeleteTag,
+                    onGridReturnTargetHandled = onGridReturnTargetHandled,
                     selectedMediaUrisForDelete = selectedMediaUrisForDelete,
                     onSelectedMediaUrisForDeleteChange = onSelectedMediaUrisForDeleteChange,
                     onDeleteMediaUris = onDeleteMediaUris,
-                    onExportFavorites = onExportFavorites,
-                    onImportFavorites = onImportFavorites,
+                    onExportBackup = onExportBackup,
+                    onImportBackup = onImportBackup,
                 )
             }
         }
 
-        AnimatedContent(
-            targetState = state.viewerItem?.uri,
-            transitionSpec = {
-                (fadeIn(animationSpec = tween(ViewerUiSpec.VIEWER_TRANSITION_DURATION_MILLIS)) +
-                    scaleIn(
-                        animationSpec = tween(ViewerUiSpec.VIEWER_TRANSITION_DURATION_MILLIS),
-                        initialScale = 0.98f,
-                    ))
-                    .togetherWith(
-                        fadeOut(animationSpec = tween(ViewerUiSpec.VIEWER_TRANSITION_DURATION_MILLIS)) +
-                            scaleOut(
-                                animationSpec = tween(ViewerUiSpec.VIEWER_TRANSITION_DURATION_MILLIS),
-                                targetScale = 0.98f,
-                            ),
-                    )
-            },
-            label = "viewer_transition",
-        ) { itemUri ->
-            itemUri?.let { uri ->
-                val item = state.selectedItems.firstOrNull { media -> media.uri == uri } ?: return@let
-                val viewerIndex = state.selectedItems.indexOfFirst { media -> media.uri == uri }
-                val viewerDeleteTargetUri = state.selectedItems.getOrNull(viewerIndex + 1)?.uri
-                    ?: state.selectedItems.getOrNull(viewerIndex - 1)?.uri
-                MediaViewer(
-                    item = item,
-                    hasPrevious = viewerIndex > 0,
-                    hasNext = viewerIndex >= 0 && viewerIndex < state.selectedItems.lastIndex,
-                    onClose = onCloseViewer,
-                    onNext = onNext,
-                    onPrevious = onPrevious,
-                    onFirst = onFirst,
-                    onLast = onLast,
-                    onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
-                    onDeleteCurrentMedia = { onDeleteViewerMedia(item.uri, viewerDeleteTargetUri) },
-                )
-            }
+        state.viewerItem?.uri?.let { uri ->
+            val item = state.selectedItems.firstOrNull { media -> media.uri == uri } ?: return@let
+            val viewerIndex = state.selectedItems.indexOfFirst { media -> media.uri == uri }
+            val viewerDeleteTargetUri = state.selectedItems.getOrNull(viewerIndex + 1)?.uri
+                ?: state.selectedItems.getOrNull(viewerIndex - 1)?.uri
+            MediaViewer(
+                item = item,
+                hasPrevious = viewerIndex > 0,
+                hasNext = viewerIndex >= 0 && viewerIndex < state.selectedItems.lastIndex,
+                onClose = onCloseViewer,
+                onNext = onNext,
+                onPrevious = onPrevious,
+                onFirst = onFirst,
+                onLast = onLast,
+                onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
+                allTags = state.tags,
+                selectedTags = state.mediaTags[item.uri].orEmpty(),
+                onToggleMediaTag = { tagName -> onToggleMediaTag(item.uri, tagName) },
+                onDeleteCurrentMedia = { onDeleteViewerMedia(item.uri, viewerDeleteTargetUri) },
+            )
         }
     }
 }
@@ -501,16 +525,20 @@ private fun BrowserScreen(
     state: VideoSeeUiState,
     onSelectFolder: (String) -> Unit,
     onSelectAuthor: (String) -> Unit,
+    onSelectTag: (String) -> Unit,
     onSelectBrowserMode: (BrowserMode) -> Unit,
+    onCollectionSearchQueryChange: (String) -> Unit,
     onSelectCollectionSortField: (CollectionSortField) -> Unit,
     onToggleCollectionSortDirection: () -> Unit,
     onSetAuthorFavoriteLevel: (String, Int) -> Unit,
     onSelectMediaSortField: (MediaSortField) -> Unit,
     onToggleMediaSortDirection: () -> Unit,
     onSetMediaFavoriteLevel: (String, Int) -> Unit,
+    onEnsureVideoThumbnail: (MediaItem) -> Unit,
     onOpenItem: (MediaItem) -> Unit,
     onRefresh: () -> Unit,
     onOpenSync: () -> Unit,
+    onOpenBackup: () -> Unit,
     onSyncHostChange: (String) -> Unit,
     onSyncPortChange: (String) -> Unit,
     onSyncTokenChange: (String) -> Unit,
@@ -518,37 +546,48 @@ private fun BrowserScreen(
     onLoadSyncPendingFiles: () -> Unit,
     onDownloadSyncFile: (SyncPendingFile) -> Unit,
     onDownloadAllSyncFiles: () -> Unit,
+    onAddTag: (String) -> Unit,
+    onDeleteTag: (String) -> Unit,
+    onGridReturnTargetHandled: (String) -> Unit,
     selectedMediaUrisForDelete: Set<String>,
     onSelectedMediaUrisForDeleteChange: (Set<String>) -> Unit,
     onDeleteMediaUris: (Set<String>) -> Unit,
-    onExportFavorites: () -> Unit,
-    onImportFavorites: () -> Unit,
+    onExportBackup: (String) -> Unit,
+    onImportBackup: (String) -> Unit,
 ) {
     val collections = state.visibleCollections
     val selectedCollection = state.selectedCollection
+    val selectedCollectionId = selectedCollection?.id
+    val selectedCollectionIds = when (state.browserMode) {
+        BrowserMode.Tag -> state.selectedTagIds.ifEmpty { selectedCollection?.id?.let { setOf(it) }.orEmpty() }
+        else -> selectedCollection?.id?.let { setOf(it) }.orEmpty()
+    }
     val onSelectCollection = when (state.browserMode) {
         BrowserMode.Folder -> onSelectFolder
         BrowserMode.Author -> onSelectAuthor
+        BrowserMode.Tag -> onSelectTag
     }
 
     Row(Modifier.fillMaxSize()) {
         FolderRail(
             collections = collections,
-            selectedCollectionId = selectedCollection?.id,
+            selectedCollectionIds = selectedCollectionIds,
             browserMode = state.browserMode,
             hasAuthors = state.authors.isNotEmpty(),
+            hasTags = state.tags.isNotEmpty(),
             isRefreshing = state.isRefreshing,
             onRefresh = onRefresh,
             onSelectBrowserMode = onSelectBrowserMode,
+            searchQuery = state.collectionSearchQuery,
+            onSearchQueryChange = onCollectionSearchQueryChange,
             collectionSortField = state.collectionSortField,
             collectionSortDirection = state.collectionSortDirection,
             onSelectCollectionSortField = onSelectCollectionSortField,
             onToggleCollectionSortDirection = onToggleCollectionSortDirection,
             onSetAuthorFavoriteLevel = onSetAuthorFavoriteLevel,
             onSelectCollection = onSelectCollection,
+            onOpenBackup = onOpenBackup,
             onOpenSync = onOpenSync,
-            onExportFavorites = onExportFavorites,
-            onImportFavorites = onImportFavorites,
             modifier = Modifier.width(214.dp).fillMaxHeight(),
         )
         Box(
@@ -558,11 +597,11 @@ private fun BrowserScreen(
                 .background(Color(0xFF252A33)),
         )
         Crossfade(
-            targetState = state.rightPaneMode to selectedCollection,
+            targetState = state.rightPaneMode to selectedCollectionId,
             modifier = Modifier.weight(1f).fillMaxHeight(),
             animationSpec = tween(ViewerUiSpec.FOLDER_SWITCH_DURATION_MILLIS),
             label = "media_collection_switch",
-        ) { (rightPaneMode, collection) ->
+        ) { (rightPaneMode, collectionId) ->
             when (rightPaneMode) {
                 RightPaneMode.Sync -> SyncScreen(
                     host = state.syncHost,
@@ -582,7 +621,15 @@ private fun BrowserScreen(
                     onDownloadAll = onDownloadAllSyncFiles,
                     modifier = Modifier.fillMaxSize(),
                 )
-                RightPaneMode.Browser -> if (collection == null) {
+                RightPaneMode.Backup -> BackupScreen(
+                    tags = state.tags,
+                    onAddTag = onAddTag,
+                    onDeleteTag = onDeleteTag,
+                    onExportBackup = onExportBackup,
+                    onImportBackup = onImportBackup,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                RightPaneMode.Browser -> if (collectionId == null || selectedCollection == null) {
                     EmptyScreen("No media found")
                 } else {
                     Column(Modifier.fillMaxHeight()) {
@@ -608,6 +655,10 @@ private fun BrowserScreen(
                             items = state.selectedItems,
                             onOpenItem = onOpenItem,
                             onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
+                            onEnsureVideoThumbnail = onEnsureVideoThumbnail,
+                            videoThumbnailPaths = state.videoThumbnailPaths,
+                            returnTargetUri = state.gridReturnTargetUri,
+                            onReturnTargetHandled = onGridReturnTargetHandled,
                             selectedMediaUrisForDelete = selectedMediaUrisForDelete,
                             onSelectedMediaUrisForDeleteChange = onSelectedMediaUrisForDeleteChange,
                             modifier = Modifier.weight(1f),
@@ -764,27 +815,28 @@ private fun SortDirection.label(): String {
 @Composable
 private fun FolderRail(
     collections: List<MediaFolder>,
-    selectedCollectionId: String?,
+    selectedCollectionIds: Set<String>,
     browserMode: BrowserMode,
     hasAuthors: Boolean,
+    hasTags: Boolean,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
     onSelectBrowserMode: (BrowserMode) -> Unit,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
     collectionSortField: CollectionSortField,
     collectionSortDirection: SortDirection,
     onSelectCollectionSortField: (CollectionSortField) -> Unit,
     onToggleCollectionSortDirection: () -> Unit,
     onSetAuthorFavoriteLevel: (String, Int) -> Unit,
     onSelectCollection: (String) -> Unit,
+    onOpenBackup: () -> Unit,
     onOpenSync: () -> Unit,
-    onExportFavorites: () -> Unit,
-    onImportFavorites: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.background(Color(0xFF15181D))) {
         FavoritesBackupToolbar(
-            onExportFavorites = onExportFavorites,
-            onImportFavorites = onImportFavorites,
+            onOpenBackup = onOpenBackup,
             onOpenSync = onOpenSync,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -792,9 +844,16 @@ private fun FolderRail(
         FolderToolbar(
             browserMode = browserMode,
             hasAuthors = hasAuthors,
+            hasTags = hasTags,
             isRefreshing = isRefreshing,
             onRefresh = onRefresh,
             onSelectBrowserMode = onSelectBrowserMode,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        RailDivider()
+        CollectionSearchField(
+            query = searchQuery,
+            onQueryChange = onSearchQueryChange,
             modifier = Modifier.fillMaxWidth(),
         )
         RailDivider()
@@ -813,7 +872,7 @@ private fun FolderRail(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(collections, key = { it.id }) { collection ->
-                val selected = collection.id == selectedCollectionId
+                val selected = collection.id in selectedCollectionIds
                 val rowBackground by animateColorAsState(
                     targetValue = if (selected) Color(0xFF25313A) else Color.Transparent,
                     animationSpec = tween(ViewerUiSpec.SELECTION_TRANSITION_DURATION_MILLIS),
@@ -829,7 +888,7 @@ private fun FolderRail(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     AsyncImage(
-                        model = mediaImageModel(collection.previewItem),
+                        model = videoFrameImageModel(collection.previewItem),
                         contentDescription = null,
                         modifier = Modifier
                             .size(48.dp)
@@ -872,6 +931,63 @@ private fun FolderRail(
 }
 
 @Composable
+private fun CollectionSearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BasicTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = modifier,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
+        decorationBox = { innerTextField ->
+            Row(
+                modifier = Modifier
+                    .height(48.dp)
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFF3A3740))
+                    .border(
+                        width = 1.dp,
+                        color = Color(0x663DDC84),
+                        shape = RoundedCornerShape(4.dp),
+                    )
+                    .padding(start = 12.dp, end = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (query.isEmpty()) {
+                        Text(
+                            "搜索",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
+                    innerTextField()
+                }
+                if (query.isNotEmpty()) {
+                    Text(
+                        "×",
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { onQueryChange("") }
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                        color = Color(0xFFE8EAED),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        },
+    )
+}
+
+@Composable
 private fun RailDivider() {
     Box(
         Modifier
@@ -883,8 +999,7 @@ private fun RailDivider() {
 
 @Composable
 private fun FavoritesBackupToolbar(
-    onExportFavorites: () -> Unit,
-    onImportFavorites: () -> Unit,
+    onOpenBackup: () -> Unit,
     onOpenSync: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -896,19 +1011,13 @@ private fun FavoritesBackupToolbar(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         SortChip(
-            text = "导出爱心",
+            text = "数据备份",
             selected = false,
-            onClick = onExportFavorites,
+            onClick = onOpenBackup,
             compact = true,
         )
         SortChip(
-            text = "导入爱心",
-            selected = false,
-            onClick = onImportFavorites,
-            compact = true,
-        )
-        SortChip(
-            text = "同步",
+            text = "下载",
             selected = false,
             onClick = onOpenSync,
             compact = true,
@@ -920,20 +1029,28 @@ private fun FavoritesBackupToolbar(
 private fun AuthorFavoritePicker(
     favoriteLevel: Int,
     onFavoriteLevelChange: (Int) -> Unit,
+    heartSize: androidx.compose.ui.unit.Dp = 14.dp,
+    touchTargetSize: androidx.compose.ui.unit.Dp = 20.dp,
+    spacing: androidx.compose.ui.unit.Dp = 6.dp,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
         repeat(3) { index ->
             val level = index + 1
             val selected = level <= favoriteLevel
-            HeartButton(
-                selected = selected,
+            Box(
                 modifier = Modifier
+                    .size(touchTargetSize)
                     .clip(RoundedCornerShape(4.dp))
                     .clickable {
                         onFavoriteLevelChange(if (favoriteLevel == level) 0 else level)
-                    }
-                    .padding(horizontal = 2.dp, vertical = 1.dp),
-            )
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                HeartButton(
+                    selected = selected,
+                    heartSize = heartSize,
+                )
+            }
         }
     }
 }
@@ -941,9 +1058,10 @@ private fun AuthorFavoritePicker(
 @Composable
 private fun HeartButton(
     selected: Boolean,
+    heartSize: androidx.compose.ui.unit.Dp = 14.dp,
     modifier: Modifier = Modifier,
 ) {
-    Canvas(modifier = modifier.size(14.dp)) {
+    Canvas(modifier = modifier.size(heartSize)) {
         val path = Path().apply {
             moveTo(size.width * 0.5f, size.height * 0.88f)
             cubicTo(
@@ -1004,13 +1122,16 @@ private fun ViewerFavoritePicker(
 ) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(20.dp))
             .background(Color(0x88000000))
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .padding(horizontal = 9.dp, vertical = 7.dp),
     ) {
         AuthorFavoritePicker(
             favoriteLevel = favoriteLevel,
             onFavoriteLevelChange = onFavoriteLevelChange,
+            heartSize = 22.dp,
+            touchTargetSize = 27.dp,
+            spacing = 2.dp,
         )
     }
 }
@@ -1023,20 +1144,60 @@ private fun ViewerDeleteButton(
     Text(
         "删除",
         modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(22.dp))
             .background(Color(0x99D93025))
             .clickable { onClick() }
-            .padding(horizontal = 13.dp, vertical = 8.dp),
+            .padding(horizontal = 15.dp, vertical = 10.dp),
         color = Color.White,
-        style = MaterialTheme.typography.bodyMedium,
+        style = MaterialTheme.typography.bodyLarge,
         fontWeight = FontWeight.SemiBold,
     )
+}
+
+@Composable
+private fun ViewerTagRail(
+    tags: List<String>,
+    selectedTags: Set<String>,
+    onToggleTag: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (tags.isEmpty()) return
+    LazyColumn(
+        modifier = modifier
+            .width(72.dp)
+            .fillMaxHeight(0.58f),
+        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.Bottom),
+    ) {
+        items(tags, key = { it }) { tagName ->
+            val selected = tagName in selectedTags
+            Text(
+                tagName,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(if (selected) Color(0xCC3DDC84) else Color(0x99000000))
+                    .border(
+                        width = 1.dp,
+                        color = Color(0x66FFFFFF),
+                        shape = RoundedCornerShape(18.dp),
+                    )
+                    .clickable { onToggleTag(tagName) }
+                    .padding(horizontal = 8.dp, vertical = 10.dp),
+                color = if (selected) Color(0xFF06120B) else Color.White,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 @Composable
 private fun FolderToolbar(
     browserMode: BrowserMode,
     hasAuthors: Boolean,
+    hasTags: Boolean,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
     onSelectBrowserMode: (BrowserMode) -> Unit,
@@ -1060,6 +1221,12 @@ private fun FolderToolbar(
             selected = browserMode == BrowserMode.Author,
             enabled = hasAuthors,
             onClick = { onSelectBrowserMode(BrowserMode.Author) },
+        )
+        BrowserModeButton(
+            text = "标签",
+            selected = browserMode == BrowserMode.Tag,
+            enabled = hasTags,
+            onClick = { onSelectBrowserMode(BrowserMode.Tag) },
         )
         Text(
             if (isRefreshing) "刷新" else "刷新",
@@ -1113,6 +1280,66 @@ private fun BrowserModeButton(
         style = MaterialTheme.typography.bodySmall,
         fontWeight = FontWeight.SemiBold,
     )
+}
+
+@Composable
+private fun BackupScreen(
+    tags: List<String>,
+    onAddTag: (String) -> Unit,
+    onDeleteTag: (String) -> Unit,
+    onExportBackup: (String) -> Unit,
+    onImportBackup: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var newTagName by remember { mutableStateOf("") }
+    Column(
+        modifier = modifier
+            .background(Color(0xFF111317))
+            .padding(14.dp),
+    ) {
+        Text("数据备份", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SortChip("导出爱心和标签数据", selected = true, onClick = { onExportBackup("all") })
+            SortChip("导入爱心和标签数据", selected = false, onClick = { onImportBackup("all") })
+        }
+        Spacer(Modifier.height(18.dp))
+        Text("标签设置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextField(
+                value = newTagName,
+                onValueChange = { newTagName = it },
+                label = { Text("新标签") },
+                singleLine = true,
+                modifier = Modifier.width(220.dp),
+            )
+            SortChip(
+                text = "添加",
+                selected = true,
+                onClick = {
+                    onAddTag(newTagName)
+                    newTagName = ""
+                },
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(tags, key = { it }) { tagName ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF20242C))
+                        .padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(tagName, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                    SortChip("删除", selected = false, onClick = { onDeleteTag(tagName) })
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1265,84 +1492,284 @@ private fun MediaGrid(
     items: List<MediaItem>,
     onOpenItem: (MediaItem) -> Unit,
     onSetMediaFavoriteLevel: (String, Int) -> Unit,
+    onEnsureVideoThumbnail: (MediaItem) -> Unit,
+    videoThumbnailPaths: Map<String, String>,
+    returnTargetUri: String?,
+    onReturnTargetHandled: (String) -> Unit,
     selectedMediaUrisForDelete: Set<String>,
     onSelectedMediaUrisForDeleteChange: (Set<String>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val deleteSelectionMode = selectedMediaUrisForDelete.isNotEmpty()
-    LazyVerticalGrid(
-        columns = GridCells.Adaptive(124.dp),
-        modifier = modifier.padding(10.dp),
-        contentPadding = PaddingValues(bottom = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        items(items, key = { it.uri }) { item ->
-            val selectedForDelete = item.uri in selectedMediaUrisForDelete
-            Box(
-                modifier = Modifier
-                    .aspectRatio(1f)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFF20242C))
-                    .combinedClickable(
-                        onClick = {
-                            if (deleteSelectionMode) {
-                                onSelectedMediaUrisForDeleteChange(
-                                    if (selectedForDelete) {
-                                        selectedMediaUrisForDelete - item.uri
-                                    } else {
-                                        selectedMediaUrisForDelete + item.uri
-                                    },
-                                )
-                            } else {
-                                onOpenItem(item)
-                            }
-                        },
-                        onLongClick = {
-                            onSelectedMediaUrisForDeleteChange(selectedMediaUrisForDelete + item.uri)
-                        },
-                    ),
-            ) {
-                AsyncImage(
-                    model = mediaImageModel(item),
-                    contentDescription = item.displayName,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
+    val gridState = rememberLazyGridState()
+    val coroutineScope = rememberCoroutineScope()
+    val showScrollToTop by remember {
+        derivedStateOf {
+            gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 0
+        }
+    }
+    val returnTargetScale = remember { Animatable(1f) }
+    val returnTargetBorderAlpha = remember { Animatable(0f) }
+    val returnTargetIndex = remember(items, returnTargetUri) {
+        GridReturnFocus.targetIndex(items, returnTargetUri)
+    }
+    BoxWithConstraints(modifier = modifier) {
+        val columnCount = remember(maxWidth) {
+            ((maxWidth + 8.dp) / (124.dp + 8.dp)).toInt().coerceAtLeast(1)
+        }
+        val cellSize = remember(maxWidth, columnCount) {
+            (maxWidth - 20.dp - 8.dp * (columnCount - 1)) / columnCount
+        }
+        val visibleRowCount = remember(maxHeight, cellSize) {
+            ((maxHeight + 8.dp) / (cellSize + 8.dp)).toInt().coerceAtLeast(1)
+        }
+        val centeredScrollIndex = remember(returnTargetIndex, columnCount, visibleRowCount) {
+            returnTargetIndex?.let {
+                GridReturnFocus.centeredScrollIndex(
+                    targetIndex = it,
+                    columnCount = columnCount,
+                    visibleRowCount = visibleRowCount,
                 )
-                if (item.mediaType == MediaType.Video) {
-                    Text(
-                        text = "▶ ${item.durationMillis.formatDuration()}",
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .background(Color(0x99000000))
-                            .padding(horizontal = 6.dp, vertical = 3.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+            }
+        }
+        LaunchedEffect(returnTargetUri, returnTargetIndex, centeredScrollIndex) {
+            val targetUri = returnTargetUri ?: return@LaunchedEffect
+            centeredScrollIndex ?: return@LaunchedEffect
+            gridState.animateScrollToItem(centeredScrollIndex)
+            returnTargetScale.snapTo(1f)
+            returnTargetBorderAlpha.snapTo(1f)
+            returnTargetScale.animateTo(
+                targetValue = 1.08f,
+                animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
+            )
+            returnTargetScale.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 440, easing = FastOutSlowInEasing),
+            )
+            delay(300)
+            returnTargetBorderAlpha.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(durationMillis = 400, easing = FastOutSlowInEasing),
+            )
+            onReturnTargetHandled(targetUri)
+        }
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(124.dp),
+            state = gridState,
+            modifier = Modifier.fillMaxSize().padding(10.dp),
+            contentPadding = PaddingValues(bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(items, key = { it.uri }) { item ->
+                val selectedForDelete = item.uri in selectedMediaUrisForDelete
+                val isReturnTarget = item.uri == returnTargetUri
+                val thumbnailPath = videoThumbnailPaths[item.uri]
+                LaunchedEffect(item.uri, thumbnailPath) {
+                    if (item.mediaType == MediaType.Video && thumbnailPath == null) {
+                        delay(180)
+                        onEnsureVideoThumbnail(item)
+                    }
                 }
                 Box(
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .background(Color(0x99000000))
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                        .graphicsLayer {
+                            val scale = if (isReturnTarget) returnTargetScale.value else 1f
+                            scaleX = scale
+                            scaleY = scale
+                        }
+                        .aspectRatio(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF20242C))
+                        .combinedClickable(
+                            onClick = {
+                                if (deleteSelectionMode) {
+                                    onSelectedMediaUrisForDeleteChange(
+                                        if (selectedForDelete) {
+                                            selectedMediaUrisForDelete - item.uri
+                                        } else {
+                                            selectedMediaUrisForDelete + item.uri
+                                        },
+                                    )
+                                } else {
+                                    onOpenItem(item)
+                                }
+                            },
+                            onLongClick = {
+                                onSelectedMediaUrisForDeleteChange(selectedMediaUrisForDelete + item.uri)
+                            },
+                        ),
                 ) {
-                    AuthorFavoritePicker(
-                        favoriteLevel = item.favoriteLevel,
-                        onFavoriteLevelChange = { level ->
-                            onSetMediaFavoriteLevel(item.uri, level)
-                        },
+                    AsyncImage(
+                        model = mediaImageModel(item, thumbnailPath),
+                        contentDescription = item.displayName,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
                     )
-                }
-                if (deleteSelectionMode) {
-                    DeleteSelectionCheckbox(
-                        selected = selectedForDelete,
+                    if (item.mediaType == MediaType.Video) {
+                        Text(
+                            text = "▶ ${item.durationMillis.formatDuration()}",
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .background(Color(0x99000000))
+                                .padding(horizontal = 6.dp, vertical = 3.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Box(
                         modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(7.dp),
-                    )
+                            .align(Alignment.BottomEnd)
+                            .background(Color(0x99000000))
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                    ) {
+                        AuthorFavoritePicker(
+                            favoriteLevel = item.favoriteLevel,
+                            onFavoriteLevelChange = { level ->
+                                onSetMediaFavoriteLevel(item.uri, level)
+                            },
+                        )
+                    }
+                    if (deleteSelectionMode) {
+                        DeleteSelectionCheckbox(
+                            selected = selectedForDelete,
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(7.dp),
+                        )
+                    }
+                    if (isReturnTarget && returnTargetBorderAlpha.value > 0f) {
+                        Box(
+                            modifier = Modifier
+                                .matchParentSize()
+                                .border(
+                                    width = 3.dp,
+                                    color = Color(0xFFFFD54F).copy(alpha = returnTargetBorderAlpha.value),
+                                    shape = RoundedCornerShape(8.dp),
+                                ),
+                        )
+                    }
                 }
             }
         }
+        MediaFastScroller(
+            gridState = gridState,
+            itemCount = items.size,
+            columnCount = columnCount,
+            visibleRowCount = visibleRowCount,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .padding(end = 4.dp, top = 64.dp, bottom = 72.dp),
+        )
+        AnimatedVisibility(
+            visible = showScrollToTop,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 14.dp, bottom = 18.dp),
+            enter = fadeIn(animationSpec = tween(160)) + scaleIn(animationSpec = tween(160)),
+            exit = fadeOut(animationSpec = tween(140)) + scaleOut(animationSpec = tween(140)),
+        ) {
+            ScrollToTopButton(
+                onClick = {
+                    coroutineScope.launch {
+                        gridState.scrollToItem(0)
+                    }
+                },
+            )
+        }
     }
+}
+
+@Composable
+private fun MediaFastScroller(
+    gridState: LazyGridState,
+    itemCount: Int,
+    columnCount: Int,
+    visibleRowCount: Int,
+    modifier: Modifier = Modifier,
+) {
+    val totalRows = remember(itemCount, columnCount) {
+        ((itemCount + columnCount - 1) / columnCount).coerceAtLeast(0)
+    }
+    val maxScrollableRow = (totalRows - visibleRowCount).coerceAtLeast(0)
+    if (maxScrollableRow == 0) return
+
+    val coroutineScope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    var trackHeightPx by remember { mutableFloatStateOf(0f) }
+    val handleHeightPx = with(density) { 56.dp.toPx() }
+    val dragRangePx = (trackHeightPx - handleHeightPx).coerceAtLeast(1f)
+    val firstVisibleRow by remember {
+        derivedStateOf { gridState.firstVisibleItemIndex / columnCount }
+    }
+    val handleOffsetPx = (firstVisibleRow.toFloat() / maxScrollableRow.toFloat())
+        .coerceIn(0f, 1f) * dragRangePx
+
+    fun scrollToTrackPosition(y: Float) {
+        if (trackHeightPx <= 0f) return
+        val ratio = ((y - handleHeightPx / 2f) / dragRangePx).coerceIn(0f, 1f)
+        val targetRow = (ratio * maxScrollableRow).roundToInt().coerceIn(0, maxScrollableRow)
+        coroutineScope.launch {
+            gridState.scrollToItem(targetRow * columnCount)
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .width(36.dp)
+            .onSizeChanged { size -> trackHeightPx = size.height.toFloat() }
+            .pointerInput(maxScrollableRow, columnCount, trackHeightPx) {
+                detectVerticalDragGestures(
+                    onDragStart = { offset -> scrollToTrackPosition(offset.y) },
+                    onVerticalDrag = { change, _ ->
+                        scrollToTrackPosition(change.position.y)
+                    },
+                )
+            },
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Box(
+            modifier = Modifier
+                .width(8.dp)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(999.dp))
+                .background(Color(0x331F242C)),
+        )
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(x = 0, y = handleOffsetPx.roundToInt()) }
+                .width(28.dp)
+                .height(56.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(Color(0xCCEEF2F7))
+                .border(
+                    width = 1.dp,
+                    color = Color(0x99FFFFFF),
+                    shape = RoundedCornerShape(999.dp),
+                ),
+        )
+    }
+}
+
+@Composable
+private fun ScrollToTopButton(onClick: () -> Unit) {
+    Text(
+        "顶部",
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xE61F242C))
+            .border(
+                width = 1.dp,
+                color = Color(0x66FFFFFF),
+                shape = RoundedCornerShape(8.dp),
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        color = Color.White,
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+    )
 }
 
 @Composable
@@ -1377,6 +1804,9 @@ private fun MediaViewer(
     onFirst: () -> Unit,
     onLast: () -> Unit,
     onSetMediaFavoriteLevel: (String, Int) -> Unit,
+    allTags: List<String>,
+    selectedTags: Set<String>,
+    onToggleMediaTag: (String) -> Unit,
     onDeleteCurrentMedia: () -> Unit,
 ) {
     var scale by remember(item.uri) { mutableFloatStateOf(1f) }
@@ -1573,7 +2003,7 @@ private fun MediaViewer(
                 },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = (maxHeight / 3) - 46.dp),
+                    .padding(end = 16.dp, bottom = (maxHeight / 3) - 64.dp),
             )
             InfoButton(
                 displayName = item.displayName,
@@ -1583,8 +2013,16 @@ private fun MediaViewer(
         ViewerDeleteButton(
             onClick = onDeleteCurrentMedia,
             modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(end = 16.dp, top = maxHeight / 4),
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = (maxHeight / 3) + 54.dp),
+        )
+        ViewerTagRail(
+            tags = allTags,
+            selectedTags = selectedTags,
+            onToggleTag = onToggleMediaTag,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 14.dp, bottom = maxHeight / 8),
         )
         AnimatedVisibility(
             visible = boundaryFeedbackText != null,
@@ -1695,7 +2133,15 @@ private val MediaFolder.previewItem: MediaItem?
     get() = items.firstOrNull { it.uri == previewUri } ?: items.firstOrNull()
 
 @Composable
-private fun mediaImageModel(item: MediaItem?): Any? {
+private fun mediaImageModel(item: MediaItem?, thumbnailPath: String? = null): Any? {
+    if (item == null) return null
+    if (item.mediaType != MediaType.Video) return item.uri
+    if (thumbnailPath != null) return File(thumbnailPath)
+    return null
+}
+
+@Composable
+private fun videoFrameImageModel(item: MediaItem?): Any? {
     if (item == null) return null
     if (item.mediaType != MediaType.Video) return item.uri
     return ImageRequest.Builder(LocalContext.current)
@@ -1872,7 +2318,7 @@ private fun VideoPlayer(
             },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = (maxHeight / 3) - 46.dp),
+                .padding(end = 16.dp, bottom = (maxHeight / 3) - 64.dp),
         )
 
         AnimatedVisibility(
@@ -1951,14 +2397,14 @@ private fun SnapshotButton(
     modifier: Modifier = Modifier,
 ) {
     Text(
-        if (isSaving) "保存中" else "截图",
+        if (isSaving) "保存中" else "截屏",
         modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
-            .background(Color(0x88000000))
+            .clip(RoundedCornerShape(22.dp))
+            .background(if (isSaving) Color(0x884A5A4E) else Color(0x9934A853))
             .clickable(enabled = !isSaving) { onClick() }
-            .padding(horizontal = 13.dp, vertical = 8.dp),
+            .padding(horizontal = 15.dp, vertical = 10.dp),
         color = Color.White,
-        style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.SemiBold,
     )
 }

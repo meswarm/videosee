@@ -7,9 +7,12 @@ import androidx.lifecycle.viewModelScope
 import app.videosee.data.MediaRepository
 import app.videosee.data.MobileSyncRepository
 import app.videosee.data.SyncPendingFile
+import app.videosee.data.VideoThumbnailCacheRepository
+import app.videosee.domain.CollectionSearch
 import app.videosee.domain.CollectionSortField
 import app.videosee.domain.MediaFolder
 import app.videosee.domain.MediaItem
+import app.videosee.domain.MediaOrganizer
 import app.videosee.domain.MediaSort
 import app.videosee.domain.MediaSortField
 import app.videosee.domain.SortDirection
@@ -18,12 +21,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 
 data class VideoSeeUiState(
     val folders: List<MediaFolder> = emptyList(),
     val authors: List<MediaFolder> = emptyList(),
+    val tags: List<String> = emptyList(),
+    val mediaTags: Map<String, Set<String>> = emptyMap(),
+    val tagFolders: List<MediaFolder> = emptyList(),
     val authorFavoriteLevels: Map<String, Int> = emptyMap(),
     val mediaFavoriteLevels: Map<String, Int> = emptyMap(),
     val browserMode: BrowserMode = BrowserMode.Folder,
@@ -31,9 +38,13 @@ data class VideoSeeUiState(
     val collectionSortDirection: SortDirection = SortDirection.Descending,
     val mediaSortField: MediaSortField = MediaSortField.ModifiedTime,
     val mediaSortDirection: SortDirection = SortDirection.Descending,
+    val favoriteMediaSortUriOrder: List<String> = emptyList(),
+    val collectionSearchQuery: String = "",
     val selectedFolderId: String? = null,
     val selectedAuthorId: String? = null,
+    val selectedTagIds: Set<String> = emptySet(),
     val viewerIndex: Int? = null,
+    val gridReturnTargetUri: String? = null,
     val isLoading: Boolean = false,
     val isRefreshing: Boolean = false,
     val hasPermission: Boolean = false,
@@ -47,6 +58,7 @@ data class VideoSeeUiState(
     val syncDownloadingIds: Set<String> = emptySet(),
     val syncIsLoading: Boolean = false,
     val syncMessage: String? = null,
+    val videoThumbnailPaths: Map<String, String> = emptyMap(),
 ) {
     val selectedFolder: MediaFolder?
         get() = folders.firstOrNull { it.id == selectedFolderId } ?: folders.firstOrNull()
@@ -55,28 +67,64 @@ data class VideoSeeUiState(
         get() = authors.firstOrNull { it.id == selectedAuthorId } ?: authors.firstOrNull()
 
     val visibleCollections: List<MediaFolder>
-        get() = MediaSort.sortCollections(
-            collections = when (browserMode) {
-            BrowserMode.Folder -> folders
-            BrowserMode.Author -> authors
-            },
-            field = collectionSortField.takeIf { browserMode == BrowserMode.Author || it != CollectionSortField.FavoriteLevel }
-                ?: CollectionSortField.ModifiedTime,
-            direction = collectionSortDirection,
+        get() = CollectionSearch.filterByName(
+            collections = MediaSort.sortCollections(
+                collections = when (browserMode) {
+                    BrowserMode.Folder -> folders
+                    BrowserMode.Author -> authors
+                    BrowserMode.Tag -> tagFolders
+                },
+                field = collectionSortField.takeIf { browserMode == BrowserMode.Author || it != CollectionSortField.FavoriteLevel }
+                    ?: CollectionSortField.ModifiedTime,
+                direction = collectionSortDirection,
+            ),
+            query = collectionSearchQuery,
         )
 
     val selectedCollection: MediaFolder?
         get() = when (browserMode) {
             BrowserMode.Folder -> selectedFolder
             BrowserMode.Author -> selectedAuthor
+            BrowserMode.Tag -> selectedTagCollection
+        }
+
+    private val selectedTagCollection: MediaFolder?
+        get() {
+            val effectiveTagIds = selectedTagIds.ifEmpty {
+                tagFolders.firstOrNull()?.let { setOf(it.id) }.orEmpty()
+            }
+            if (effectiveTagIds.isEmpty()) return null
+            if (effectiveTagIds.size == 1) {
+                return tagFolders.firstOrNull { it.id in effectiveTagIds }
+            }
+            val selectedTagNames = tagFolders
+                .filter { it.id in effectiveTagIds }
+                .map { it.name }
+            return MediaOrganizer.groupByTagIntersection(
+                items = folders.flatMap { it.items }.distinctBy { it.uri },
+                tagNames = selectedTagNames,
+                mediaTags = mediaTags,
+            )
         }
 
     val selectedItems: List<MediaItem>
-        get() = MediaSort.sortItems(
-            items = selectedCollection?.items.orEmpty(),
-            field = mediaSortField,
-            direction = mediaSortDirection,
-        )
+        get() {
+            val items = selectedCollection?.items.orEmpty()
+            return if (mediaSortField == MediaSortField.FavoriteLevel && favoriteMediaSortUriOrder.isNotEmpty()) {
+                MediaSort.sortItemsByStableUriOrder(
+                    items = items,
+                    stableUriOrder = favoriteMediaSortUriOrder,
+                    fallbackField = mediaSortField,
+                    fallbackDirection = mediaSortDirection,
+                )
+            } else {
+                MediaSort.sortItems(
+                    items = items,
+                    field = mediaSortField,
+                    direction = mediaSortDirection,
+                )
+            }
+        }
 
     val viewerItem: MediaItem?
         get() = viewerIndex?.let { selectedItems.getOrNull(it) }
@@ -91,23 +139,30 @@ data class VideoSeeUiState(
 enum class BrowserMode {
     Folder,
     Author,
+    Tag,
 }
 
 enum class RightPaneMode {
     Browser,
     Sync,
+    Backup,
 }
 
 class VideoSeeViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = MediaRepository(application)
     private val syncRepository = MobileSyncRepository(application)
+    private val thumbnailCacheRepository = VideoThumbnailCacheRepository(application)
     private val syncSettingsStore = SyncSettingsStore(application)
     private val authorFavoriteStore = FavoriteLevelStore(application, "author_favorite_levels")
     private val mediaFavoriteStore = FavoriteLevelStore(application, "media_favorite_levels")
+    private val tagStore = TagDataStore(application)
+    private val thumbnailRequestsInFlight = mutableSetOf<String>()
     private val _uiState = MutableStateFlow(
         VideoSeeUiState(
             authorFavoriteLevels = authorFavoriteStore.load(),
             mediaFavoriteLevels = mediaFavoriteStore.load(),
+            tags = tagStore.load().tagNames,
+            mediaTags = tagStore.load().mediaTags,
             syncHost = syncSettingsStore.host,
             syncPort = syncSettingsStore.port,
             syncToken = syncSettingsStore.token,
@@ -153,14 +208,29 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
                             state.browserMode == BrowserMode.Author && library.authors.isEmpty() -> BrowserMode.Folder
                             else -> state.browserMode
                         }
+                        val folders = library.folders.withMediaFavoriteLevels(state.mediaFavoriteLevels)
+                        val authors = library.authors
+                            .withAuthorFavoriteLevels(state.authorFavoriteLevels)
+                            .withMediaFavoriteLevels(state.mediaFavoriteLevels)
+                        val tagFolders = MediaOrganizer.groupByTag(
+                            items = (library.folders.flatMap { it.items }).distinctBy { it.uri }
+                                .map { item ->
+                                    item.copy(favoriteLevel = state.mediaFavoriteLevels[item.uri]?.coerceIn(0, MAX_FAVORITE_LEVEL) ?: 0)
+                                },
+                            tagNames = state.tags,
+                            mediaTags = state.mediaTags,
+                        )
+                        val selectedTagIds = state.selectedTagIds
+                            .filterTo(mutableSetOf()) { id -> tagFolders.any { it.id == id } }
+                            .ifEmpty { tagFolders.firstOrNull()?.let { mutableSetOf(it.id) } ?: mutableSetOf() }
                         val refreshedState = state.copy(
-                            folders = library.folders.withMediaFavoriteLevels(state.mediaFavoriteLevels),
-                            authors = library.authors
-                                .withAuthorFavoriteLevels(state.authorFavoriteLevels)
-                                .withMediaFavoriteLevels(state.mediaFavoriteLevels),
+                            folders = folders,
+                            authors = authors,
+                            tagFolders = tagFolders,
                             browserMode = browserMode,
                             selectedFolderId = selectedFolderId,
                             selectedAuthorId = selectedAuthorId,
+                            selectedTagIds = selectedTagIds,
                             viewerIndex = null,
                             isLoading = false,
                             isRefreshing = false,
@@ -184,14 +254,38 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun selectFolder(folderId: String) {
-        _uiState.update {
-            it.copy(selectedFolderId = folderId, viewerIndex = null, rightPaneMode = RightPaneMode.Browser)
+        _uiState.update { state ->
+            state.copy(
+                selectedFolderId = folderId,
+                viewerIndex = null,
+                rightPaneMode = RightPaneMode.Browser,
+            ).withFreshFavoriteMediaSortOrder()
         }
     }
 
     fun selectAuthor(authorId: String) {
-        _uiState.update {
-            it.copy(selectedAuthorId = authorId, viewerIndex = null, rightPaneMode = RightPaneMode.Browser)
+        _uiState.update { state ->
+            state.copy(
+                selectedAuthorId = authorId,
+                viewerIndex = null,
+                rightPaneMode = RightPaneMode.Browser,
+            ).withFreshFavoriteMediaSortOrder()
+        }
+    }
+
+    fun selectTag(tagId: String) {
+        _uiState.update { state ->
+            val nextSelectedTagIds = when {
+                tagId in state.selectedTagIds && state.selectedTagIds.size > 1 -> state.selectedTagIds - tagId
+                tagId in state.selectedTagIds -> state.selectedTagIds
+                state.tagFolders.any { it.id == tagId } -> state.selectedTagIds + tagId
+                else -> state.selectedTagIds
+            }
+            state.copy(
+                selectedTagIds = nextSelectedTagIds,
+                viewerIndex = null,
+                rightPaneMode = RightPaneMode.Browser,
+            ).withFreshFavoriteMediaSortOrder()
         }
     }
 
@@ -224,7 +318,58 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
                 mediaFavoriteLevels = nextFavoriteLevels,
                 folders = state.folders.withMediaFavoriteLevels(nextFavoriteLevels),
                 authors = state.authors.withMediaFavoriteLevels(nextFavoriteLevels),
-            )
+            ).withTagFolders()
+        }
+    }
+
+    fun addTag(name: String) {
+        val normalizedName = name.trim().takeIf { it.isNotBlank() } ?: return
+        _uiState.update { state ->
+            if (normalizedName in state.tags) return@update state
+            val nextTags = state.tags + normalizedName
+            tagStore.save(TagData(nextTags, state.mediaTags))
+            state.copy(tags = nextTags).withTagFolders()
+        }
+    }
+
+    fun deleteTag(name: String) {
+        _uiState.update { state ->
+            val nextTags = state.tags - name
+            val nextMediaTags = state.mediaTags
+                .mapValues { (_, tags) -> tags - name }
+                .filterValues { it.isNotEmpty() }
+            tagStore.save(TagData(nextTags, nextMediaTags))
+            state.copy(tags = nextTags, mediaTags = nextMediaTags).withTagFolders()
+        }
+    }
+
+    fun toggleMediaTag(mediaUri: String, tagName: String) {
+        _uiState.update { state ->
+            if (tagName !in state.tags) return@update state
+            val currentTags = state.mediaTags[mediaUri].orEmpty()
+            val nextItemTags = if (tagName in currentTags) currentTags - tagName else currentTags + tagName
+            val nextMediaTags = if (nextItemTags.isEmpty()) {
+                state.mediaTags - mediaUri
+            } else {
+                state.mediaTags + (mediaUri to nextItemTags)
+            }
+            tagStore.save(TagData(state.tags, nextMediaTags))
+            state.copy(mediaTags = nextMediaTags).withTagFolders()
+        }
+    }
+
+    fun ensureVideoThumbnail(item: MediaItem) {
+        if (item.mediaType != app.videosee.domain.MediaType.Video) return
+        if (_uiState.value.videoThumbnailPaths.containsKey(item.uri)) return
+        if (!thumbnailRequestsInFlight.add(item.uri)) return
+        viewModelScope.launch {
+            val file = runCatching { thumbnailCacheRepository.getOrCreate(item) }.getOrNull()
+            thumbnailRequestsInFlight.remove(item.uri)
+            if (file != null) {
+                _uiState.update { state ->
+                    state.copy(videoThumbnailPaths = state.videoThumbnailPaths + (item.uri to file.absolutePath))
+                }
+            }
         }
     }
 
@@ -233,6 +378,20 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
         return FavoriteBackupJson.encode(
             authorFavoriteLevels = state.authorFavoriteLevels,
             mediaFavoriteLevels = state.mediaFavoriteLevels,
+        )
+    }
+
+    fun exportTagsBackupJson(): String {
+        val state = _uiState.value
+        return TagBackupJson.encode(TagData(state.tags, state.mediaTags))
+    }
+
+    fun exportAllBackupJson(): String {
+        val state = _uiState.value
+        return AppBackupJson.encode(
+            authorFavoriteLevels = state.authorFavoriteLevels,
+            mediaFavoriteLevels = state.mediaFavoriteLevels,
+            tagData = TagData(state.tags, state.mediaTags),
         )
     }
 
@@ -257,6 +416,40 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
         )
     }
 
+    fun importTagsBackupJson(json: String): TagBackupImportResult {
+        val tagData = TagBackupJson.decode(json)
+        tagStore.save(tagData)
+        _uiState.update { state ->
+            state.copy(tags = tagData.tagNames, mediaTags = tagData.mediaTags).withTagFolders()
+        }
+        return TagBackupImportResult(tagCount = tagData.tagNames.size, mediaCount = tagData.mediaTags.size)
+    }
+
+    fun importAllBackupJson(json: String): AppBackupImportResult {
+        val backup = AppBackupJson.decode(json)
+        authorFavoriteStore.save(backup.authorFavoriteLevels)
+        mediaFavoriteStore.save(backup.mediaFavoriteLevels)
+        tagStore.save(backup.tagData)
+        _uiState.update { state ->
+            state.copy(
+                authorFavoriteLevels = backup.authorFavoriteLevels,
+                mediaFavoriteLevels = backup.mediaFavoriteLevels,
+                tags = backup.tagData.tagNames,
+                mediaTags = backup.tagData.mediaTags,
+                folders = state.folders.withMediaFavoriteLevels(backup.mediaFavoriteLevels),
+                authors = state.authors
+                    .withAuthorFavoriteLevels(backup.authorFavoriteLevels)
+                    .withMediaFavoriteLevels(backup.mediaFavoriteLevels),
+            ).withTagFolders()
+        }
+        return AppBackupImportResult(
+            authorCount = backup.authorFavoriteLevels.size,
+            favoriteMediaCount = backup.mediaFavoriteLevels.size,
+            tagCount = backup.tagData.tagNames.size,
+            taggedMediaCount = backup.tagData.mediaTags.size,
+        )
+    }
+
     fun selectBrowserMode(mode: BrowserMode) {
         _uiState.update {
             it.copy(
@@ -266,7 +459,13 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
                     .takeIf { field -> mode == BrowserMode.Author || field != CollectionSortField.FavoriteLevel }
                     ?: CollectionSortField.ModifiedTime,
                 viewerIndex = null,
-            )
+            ).withFreshFavoriteMediaSortOrder()
+        }
+    }
+
+    fun updateCollectionSearchQuery(query: String) {
+        _uiState.update {
+            it.copy(collectionSearchQuery = query, rightPaneMode = RightPaneMode.Browser)
         }
     }
 
@@ -287,23 +486,33 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun selectMediaSortField(field: MediaSortField) {
-        _uiState.update {
-            it.copy(mediaSortField = field, viewerIndex = null, rightPaneMode = RightPaneMode.Browser)
+        _uiState.update { state ->
+            state.copy(
+                mediaSortField = field,
+                favoriteMediaSortUriOrder = emptyList(),
+                viewerIndex = null,
+                rightPaneMode = RightPaneMode.Browser,
+            ).withFreshFavoriteMediaSortOrder()
         }
     }
 
     fun toggleMediaSortDirection() {
-        _uiState.update {
-            it.copy(
-                mediaSortDirection = it.mediaSortDirection.toggle(),
+        _uiState.update { state ->
+            state.copy(
+                mediaSortDirection = state.mediaSortDirection.toggle(),
+                favoriteMediaSortUriOrder = emptyList(),
                 viewerIndex = null,
                 rightPaneMode = RightPaneMode.Browser,
-            )
+            ).withFreshFavoriteMediaSortOrder()
         }
     }
 
     fun openSyncPane() {
         _uiState.update { it.copy(rightPaneMode = RightPaneMode.Sync, viewerIndex = null) }
+    }
+
+    fun openBackupPane() {
+        _uiState.update { it.copy(rightPaneMode = RightPaneMode.Backup, viewerIndex = null) }
     }
 
     fun updateSyncHost(host: String) {
@@ -447,12 +656,30 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
     fun openViewer(item: MediaItem) {
         _uiState.update { state ->
             val index = state.selectedItems.indexOfFirst { it.uri == item.uri }
-            state.copy(viewerIndex = index.takeIf { it >= 0 })
+            state.copy(
+                viewerIndex = index.takeIf { it >= 0 },
+                gridReturnTargetUri = null,
+            )
         }
     }
 
     fun closeViewer() {
-        _uiState.update { it.copy(viewerIndex = null) }
+        _uiState.update { state ->
+            state.copy(
+                viewerIndex = null,
+                gridReturnTargetUri = state.viewerItem?.uri,
+            )
+        }
+    }
+
+    fun clearGridReturnTarget(uri: String) {
+        _uiState.update { state ->
+            if (state.gridReturnTargetUri == uri) {
+                state.copy(gridReturnTargetUri = null)
+            } else {
+                state
+            }
+        }
     }
 
     fun showNext() {
@@ -497,11 +724,49 @@ data class FavoriteBackupImportResult(
     val mediaCount: Int,
 )
 
+data class TagBackupImportResult(
+    val tagCount: Int,
+    val mediaCount: Int,
+)
+
+data class AppBackupImportResult(
+    val authorCount: Int,
+    val favoriteMediaCount: Int,
+    val tagCount: Int,
+    val taggedMediaCount: Int,
+)
+
 private fun SortDirection.toggle(): SortDirection {
     return when (this) {
         SortDirection.Ascending -> SortDirection.Descending
         SortDirection.Descending -> SortDirection.Ascending
     }
+}
+
+private fun VideoSeeUiState.withFreshFavoriteMediaSortOrder(): VideoSeeUiState {
+    if (mediaSortField != MediaSortField.FavoriteLevel) {
+        return copy(favoriteMediaSortUriOrder = emptyList())
+    }
+    return copy(
+        favoriteMediaSortUriOrder = MediaSort.sortItems(
+            items = selectedCollection?.items.orEmpty(),
+            field = mediaSortField,
+            direction = mediaSortDirection,
+        ).map { it.uri },
+    )
+}
+
+private fun VideoSeeUiState.withTagFolders(): VideoSeeUiState {
+    val allItems = folders.flatMap { it.items }.distinctBy { it.uri }
+    val nextTagFolders = MediaOrganizer.groupByTag(
+        items = allItems,
+        tagNames = tags,
+        mediaTags = mediaTags,
+    )
+    val nextSelectedTagIds = selectedTagIds
+        .filterTo(mutableSetOf()) { id -> nextTagFolders.any { it.id == id } }
+        .ifEmpty { nextTagFolders.firstOrNull()?.let { mutableSetOf(it.id) } ?: mutableSetOf() }
+    return copy(tagFolders = nextTagFolders, selectedTagIds = nextSelectedTagIds)
 }
 
 private fun VideoSeeUiState.syncBaseUrlOrNull(): String? {
@@ -545,6 +810,25 @@ private class FavoriteLevelStore(context: Context, preferencesName: String) {
                 }
             }
         }.apply()
+    }
+}
+
+private data class TagData(
+    val tagNames: List<String>,
+    val mediaTags: Map<String, Set<String>>,
+)
+
+private class TagDataStore(context: Context) {
+    private val preferences = context.getSharedPreferences("media_tags", Context.MODE_PRIVATE)
+
+    fun load(): TagData {
+        return preferences.getString("tag_data", null)
+            ?.let { TagBackupJson.decode(it) }
+            ?: TagData(emptyList(), emptyMap())
+    }
+
+    fun save(tagData: TagData) {
+        preferences.edit().putString("tag_data", TagBackupJson.encode(tagData)).apply()
     }
 }
 
@@ -638,6 +922,83 @@ private object FavoriteBackupJson {
             }
         }
         return favorites
+    }
+}
+
+private data class AppBackup(
+    val authorFavoriteLevels: Map<String, Int>,
+    val mediaFavoriteLevels: Map<String, Int>,
+    val tagData: TagData,
+)
+
+private object AppBackupJson {
+    fun encode(
+        authorFavoriteLevels: Map<String, Int>,
+        mediaFavoriteLevels: Map<String, Int>,
+        tagData: TagData,
+    ): String {
+        return JSONObject()
+            .put("version", 2)
+            .put("favorites", JSONObject(FavoriteBackupJson.encode(authorFavoriteLevels, mediaFavoriteLevels)))
+            .put("tags", JSONObject(TagBackupJson.encode(tagData)))
+            .toString(2)
+    }
+
+    fun decode(json: String): AppBackup {
+        val root = JSONObject(json)
+        val favorites = root.optJSONObject("favorites") ?: root
+        val favoriteBackup = FavoriteBackupJson.decode(favorites.toString())
+        val tagData = root.optJSONObject("tags")
+            ?.let { TagBackupJson.decode(it.toString()) }
+            ?: TagBackupJson.decode(json)
+        return AppBackup(
+            authorFavoriteLevels = favoriteBackup.authorFavoriteLevels,
+            mediaFavoriteLevels = favoriteBackup.mediaFavoriteLevels,
+            tagData = tagData,
+        )
+    }
+}
+
+private object TagBackupJson {
+    fun encode(tagData: TagData): String {
+        val mediaTags = JSONObject()
+        tagData.mediaTags.toSortedMap().forEach { (uri, tags) ->
+            mediaTags.put(uri, JSONArray(tags.sorted()))
+        }
+        return JSONObject()
+            .put("version", 1)
+            .put("tagNames", JSONArray(tagData.tagNames.distinct()))
+            .put("mediaTags", mediaTags)
+            .toString(2)
+    }
+
+    fun decode(json: String): TagData {
+        val root = JSONObject(json)
+        val tagNamesJson = root.optJSONArray("tagNames") ?: JSONArray()
+        val tagNames = buildList {
+            for (index in 0 until tagNamesJson.length()) {
+                val name = tagNamesJson.optString(index).trim()
+                if (name.isNotBlank() && name !in this) add(name)
+            }
+        }
+        val mediaTagsJson = root.optJSONObject("mediaTags") ?: JSONObject()
+        val mediaTags = mutableMapOf<String, Set<String>>()
+        val keys = mediaTagsJson.keys()
+        while (keys.hasNext()) {
+            val uri = keys.next()
+            val tagsJson = mediaTagsJson.optJSONArray(uri) ?: continue
+            val tags = buildSet {
+                for (index in 0 until tagsJson.length()) {
+                    val name = tagsJson.optString(index).trim()
+                    if (name.isNotBlank()) add(name)
+                }
+            }
+            if (tags.isNotEmpty()) {
+                mediaTags[uri] = tags
+            }
+        }
+        val allTagNames = (tagNames + mediaTags.values.flatten()).distinct()
+        return TagData(tagNames = allTagNames, mediaTags = mediaTags)
     }
 }
 

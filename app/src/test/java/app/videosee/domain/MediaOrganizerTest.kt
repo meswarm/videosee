@@ -113,6 +113,55 @@ class MediaOrganizerTest {
     }
 
     @Test
+    fun groups_media_by_tag_names_and_sorts_tags_by_newest_item() {
+        val items = listOf(
+            mediaItem(id = 1, displayName = "river-old.mp4", dateModifiedSeconds = 10),
+            mediaItem(id = 2, displayName = "pet.mp4", dateModifiedSeconds = 30),
+            mediaItem(id = 3, displayName = "river-new.jpg", dateModifiedSeconds = 20, mediaType = MediaType.Image),
+        )
+        val tags = MediaOrganizer.groupByTag(
+            items = items,
+            tagNames = listOf("河流", "宠物", "空标签"),
+            mediaTags = mapOf(
+                "content://media/1" to setOf("河流"),
+                "content://media/2" to setOf("宠物"),
+                "content://media/3" to setOf("河流"),
+            ),
+        )
+
+        assertEquals(listOf("tag:宠物", "tag:河流", "tag:空标签"), tags.map { it.id })
+        assertEquals(1, tags[0].count)
+        assertEquals(2, tags[1].count)
+        assertEquals(0, tags[2].count)
+        assertEquals(listOf(20L, 10L), tags[1].items.map { it.dateModifiedSeconds })
+    }
+
+    @Test
+    fun filters_media_by_tag_intersection() {
+        val items = listOf(
+            mediaItem(id = 1, displayName = "river-family-old.mp4", dateModifiedSeconds = 10),
+            mediaItem(id = 2, displayName = "river-only.mp4", dateModifiedSeconds = 30),
+            mediaItem(id = 3, displayName = "river-family-new.jpg", dateModifiedSeconds = 20, mediaType = MediaType.Image),
+            mediaItem(id = 4, displayName = "family-only.mp4", dateModifiedSeconds = 40),
+        )
+
+        val folder = MediaOrganizer.groupByTagIntersection(
+            items = items,
+            tagNames = listOf("风景", "家人"),
+            mediaTags = mapOf(
+                "content://media/1" to setOf("风景", "家人"),
+                "content://media/2" to setOf("风景"),
+                "content://media/3" to setOf("风景", "家人", "宠物"),
+                "content://media/4" to setOf("家人"),
+            ),
+        )
+
+        assertEquals("风景 + 家人", folder?.name)
+        assertEquals(2, folder?.count)
+        assertEquals(listOf("content://media/3", "content://media/1"), folder?.items?.map { it.uri })
+    }
+
+    @Test
     fun exposes_display_aspect_ratio_when_dimensions_are_available() {
         val item = MediaItem(
             id = 10,
