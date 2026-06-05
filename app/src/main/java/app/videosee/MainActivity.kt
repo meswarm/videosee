@@ -160,9 +160,9 @@ class MainActivity : ComponentActivity() {
 private fun VideoSeeTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = darkColorScheme(
-            background = Color(0xFF111317),
-            surface = Color(0xFF171A20),
-            surfaceVariant = Color(0xFF20242C),
+            background = Color(0xFF120F1A),
+            surface = Color(0xFF181321),
+            surfaceVariant = Color(0xFF241D31),
             primary = Color(0xFF3DDC84),
             onBackground = Color(0xFFE8EAED),
             onSurface = Color(0xFFE8EAED),
@@ -594,7 +594,7 @@ private fun BrowserScreen(
             Modifier
                 .width(1.dp)
                 .fillMaxHeight()
-                .background(Color(0xFF252A33)),
+                .background(Color(0xFF2B2238)),
         )
         Crossfade(
             targetState = state.rightPaneMode to selectedCollectionId,
@@ -787,7 +787,7 @@ private fun SortChip(
     compact: Boolean = false,
 ) {
     val background by animateColorAsState(
-        targetValue = if (selected) Color(0xFFFF8A00) else Color(0xFF20242C),
+        targetValue = if (selected) Color(0xFFFF8A00) else Color(0xFF241D31),
         animationSpec = tween(ViewerUiSpec.SELECTION_TRANSITION_DURATION_MILLIS),
         label = "sort_chip_background",
     )
@@ -834,7 +834,7 @@ private fun FolderRail(
     onOpenSync: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.background(Color(0xFF15181D))) {
+    Column(modifier = modifier.background(Color(0xFF15111F))) {
         FavoritesBackupToolbar(
             onOpenBackup = onOpenBackup,
             onOpenSync = onOpenSync,
@@ -874,7 +874,7 @@ private fun FolderRail(
             items(collections, key = { it.id }) { collection ->
                 val selected = collection.id in selectedCollectionIds
                 val rowBackground by animateColorAsState(
-                    targetValue = if (selected) Color(0xFF25313A) else Color.Transparent,
+                    targetValue = if (selected) Color(0xFF2D2540) else Color.Transparent,
                     animationSpec = tween(ViewerUiSpec.SELECTION_TRANSITION_DURATION_MILLIS),
                     label = "folder_selection_background",
                 )
@@ -893,7 +893,7 @@ private fun FolderRail(
                         modifier = Modifier
                             .size(48.dp)
                             .clip(RoundedCornerShape(6.dp))
-                            .background(Color(0xFF252A33)),
+                            .background(Color(0xFF241D31)),
                         contentScale = ContentScale.Crop,
                     )
                     Spacer(Modifier.width(10.dp))
@@ -948,7 +948,7 @@ private fun CollectionSearchField(
                     .height(48.dp)
                     .padding(horizontal = 10.dp, vertical = 5.dp)
                     .clip(RoundedCornerShape(4.dp))
-                    .background(Color(0xFF3A3740))
+                    .background(Color(0xFF352B42))
                     .border(
                         width = 1.dp,
                         color = Color(0x663DDC84),
@@ -993,7 +993,7 @@ private fun RailDivider() {
         Modifier
             .fillMaxWidth()
             .height(1.dp)
-            .background(Color(0xFF252A33)),
+            .background(Color(0xFF2B2238)),
     )
 }
 
@@ -1232,7 +1232,7 @@ private fun FolderToolbar(
             if (isRefreshing) "刷新" else "刷新",
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF20242C))
+                .background(Color(0xFF241D31))
                 .clickable(enabled = !isRefreshing) { onRefresh() }
                 .padding(horizontal = 9.dp, vertical = 7.dp),
             color = if (isRefreshing) MaterialTheme.colorScheme.onSurfaceVariant else Color.White,
@@ -1261,7 +1261,7 @@ private fun BrowserModeButton(
     onClick: () -> Unit,
 ) {
     val background by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.primary else Color(0xFF20242C),
+        targetValue = if (selected) MaterialTheme.colorScheme.primary else Color(0xFF241D31),
         animationSpec = tween(ViewerUiSpec.SELECTION_TRANSITION_DURATION_MILLIS),
         label = "browser_mode_background",
     )
@@ -1294,7 +1294,7 @@ private fun BackupScreen(
     var newTagName by remember { mutableStateOf("") }
     Column(
         modifier = modifier
-            .background(Color(0xFF111317))
+            .background(Color(0xFF120F1A))
             .padding(14.dp),
     ) {
         Text("数据备份", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -1330,7 +1330,7 @@ private fun BackupScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF20242C))
+                        .background(Color(0xFF241D31))
                         .padding(10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -1363,7 +1363,7 @@ private fun SyncScreen(
 ) {
     Column(
         modifier = modifier
-            .background(Color(0xFF111317))
+            .background(Color(0xFF120F1A))
             .padding(14.dp),
     ) {
         Row(
@@ -1456,7 +1456,7 @@ private fun SyncFileRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFF20242C))
+            .background(Color(0xFF241D31))
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1580,7 +1580,7 @@ private fun MediaGrid(
                         }
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF20242C))
+                        .background(Color(0xFF241D31))
                         .combinedClickable(
                             onClick = {
                                 if (deleteSelectionMode) {
@@ -1757,7 +1757,7 @@ private fun ScrollToTopButton(onClick: () -> Unit) {
         "顶部",
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xE61F242C))
+            .background(Color(0xE6241D31))
             .border(
                 width = 1.dp,
                 color = Color(0x66FFFFFF),
@@ -1781,7 +1781,7 @@ private fun DeleteSelectionCheckbox(
         modifier = modifier
             .size(22.dp)
             .clip(RoundedCornerShape(4.dp))
-            .background(if (selected) Color(0xFFD93025) else Color(0xCC111317)),
+            .background(if (selected) Color(0xFFD93025) else Color(0xCC181321)),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -1864,6 +1864,7 @@ private fun MediaViewer(
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
                     var totalSwipe = 0f
+                    var verticalSwipeCaptured = false
                     var usedMultiTouch = false
 
                     do {
@@ -1894,10 +1895,16 @@ private fun MediaViewer(
                             val dragY = change?.positionChange()?.y ?: 0f
                             if (dragY != 0f) {
                                 totalSwipe += dragY
-                                if (settleRequest != null) {
-                                    settleRequest = null
+                                if (
+                                    verticalSwipeCaptured ||
+                                    kotlin.math.abs(totalSwipe) > viewConfiguration.touchSlop
+                                ) {
+                                    verticalSwipeCaptured = true
+                                    if (settleRequest != null) {
+                                        settleRequest = null
+                                    }
+                                    change?.consume()
                                 }
-                                change?.consume()
                             }
                         }
                     } while (event.changes.any { it.pressed })

@@ -12,6 +12,7 @@ VideoSee is an Android-only local photo and video browser built with Kotlin, Jet
 ## Features
 
 - Browse local images and videos by folder, author, or tag collection.
+- Uses a near-black deep purple theme instead of a pure black interface.
 - Author collections recognize filenames like `{author_id}_{timestamp}_{media_id}` with at least two underscores, then group media by `author_id`.
 - Tag collections support multi-select intersection filtering. For example, selecting both `Scenery` and `Family` shows only media that has both tags.
 - Search the current left-side collection by name: folder names in Folder mode, author names in Author mode, and tag names in Tag mode.
@@ -24,6 +25,7 @@ VideoSee is an Android-only local photo and video browser built with Kotlin, Jet
 - Long-press a media card to enter multi-select delete mode, then delete selected media from the current collection.
 - Open any image or video in fullscreen; fullscreen heart controls stay synchronized with the grid.
 - Toggle tags for the current fullscreen media from the left-side tag rail; tag state stays synchronized with the grid.
+- Fullscreen button areas avoid taking over tiny touch movements too early, reducing missed immediate taps on tags or hearts.
 - Swipe up or down in fullscreen to move to the previous or next item. At the first or last item, the first extra swipe shows a boundary hint, and a second swipe in the same direction wraps to the other end.
 - For videos, double-tap anywhere on the fullscreen surface to play or pause, and swipe left/right anywhere to seek backward/forward by 5 seconds.
 - Video controls include a seek bar, current/total time, and fixed playback speeds: `0.25x`, `0.5x`, `0.75x`, and `0.9x`.
@@ -39,7 +41,7 @@ VideoSee is an Android-only local photo and video browser built with Kotlin, Jet
 - JDK 17 or newer with `javac`.
 - `adb` for installing on a connected phone.
 - Android device or emulator: min API 26, target API 36.
-- A compatible laptop-side sync service when using LAN sync.
+- A compatible laptop-side download service when using LAN downloads.
 
 ## Build And Test
 
@@ -70,7 +72,7 @@ If you later switch back to a universal APK, use:
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-If the phone already has the same package name installed with a different signing key, `adb install -r` may fail with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Uninstall the old app first, then install the new APK. Uninstalling clears local app data, so export the heart-rating JSON before doing this:
+If the phone already has the same package name installed with a different signing key, `adb install -r` may fail with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Uninstall the old app first, then install the new APK. Uninstalling clears local app data, so export the heart and tag JSON before doing this:
 
 ```bash
 adb uninstall app.videosee
@@ -86,7 +88,7 @@ Open the Download page from the app's left toolbar. The Android app needs:
 | IP | Laptop LAN IP, for example `192.168.1.23` |
 | Port | Download server port, default `19827` |
 | Token | Bearer token configured on the server |
-| Device ID | This phone's sync identity, default `videosee-phone` |
+| Device ID | This phone's download identity, default `videosee-phone` |
 
 Use placeholders in documentation or examples, and never commit a real token:
 
@@ -114,7 +116,7 @@ Heart ratings and tag data are stored locally in app `SharedPreferences`:
 
 - The app reads the system image/video media library and deletes media through Android's system authorization flow.
 - Screenshots and downloaded files are written to public MediaStore directories.
-- The sync token is stored in local app preferences. Do not use a public or reused sensitive token.
+- The download token is stored in local app preferences. Do not use a public or reused sensitive token.
 - Do not commit real tokens, personal media, debug APKs, signing keys, `local.properties`, Gradle caches, build outputs, or temporary icon source files.
 
 ## Development
