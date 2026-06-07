@@ -2002,6 +2002,7 @@ private fun MediaViewer(
             )
         }
 
+        val actionBottomAnchor = maxHeight / 4
         if (item.mediaType == MediaType.Image) {
             ViewerFavoritePicker(
                 favoriteLevel = item.favoriteLevel,
@@ -2010,7 +2011,7 @@ private fun MediaViewer(
                 },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = (maxHeight / 3) - 64.dp),
+                    .padding(end = 16.dp, bottom = actionBottomAnchor - 64.dp),
             )
             InfoButton(
                 displayName = item.displayName,
@@ -2021,7 +2022,7 @@ private fun MediaViewer(
             onClick = onDeleteCurrentMedia,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = (maxHeight / 3) + 54.dp),
+                .padding(end = 16.dp, bottom = actionBottomAnchor + 54.dp),
         )
         ViewerTagRail(
             tags = allTags,
@@ -2292,6 +2293,7 @@ private fun VideoPlayer(
                 },
         )
 
+        val actionBottomAnchor = maxHeight / 4
         SnapshotButton(
             isSaving = isSavingSnapshot,
             onClick = {
@@ -2316,7 +2318,7 @@ private fun VideoPlayer(
             },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = maxHeight / 3),
+                .padding(end = 16.dp, bottom = actionBottomAnchor),
         )
         ViewerFavoritePicker(
             favoriteLevel = item.favoriteLevel,
@@ -2325,7 +2327,7 @@ private fun VideoPlayer(
             },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = (maxHeight / 3) - 64.dp),
+                .padding(end = 16.dp, bottom = actionBottomAnchor - 64.dp),
         )
 
         AnimatedVisibility(
