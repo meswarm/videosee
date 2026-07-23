@@ -4916,6 +4916,7 @@ private fun MultiMediaPane(
     val toneCurve = LocalToneCurve.current
     val colorAdjustments = LocalColorAdjustments.current
     val isToneCurveEditing = LocalToneCurveEditing.current
+    val fallbackDurationMillis = item.durationMillis?.takeIf { it > 0L } ?: 0L
     var scale by remember(item.uri) { mutableFloatStateOf(initialScale) }
     var offsetX by remember(item.uri) { mutableFloatStateOf(0f) }
     var offsetY by remember(item.uri) { mutableFloatStateOf(0f) }
@@ -4924,7 +4925,7 @@ private fun MultiMediaPane(
     var resumeAfterHorizontalSeek by remember(item.uri) { mutableStateOf(false) }
     var controlsVisible by remember(item.uri) { mutableStateOf(false) }
     var currentPosition by remember(item.uri) { mutableStateOf(0L) }
-    var duration by remember(item.uri) { mutableStateOf(0L) }
+    var duration by remember(item.uri) { mutableStateOf(fallbackDurationMillis) }
     var playbackSpeed by remember(item.uri) { mutableFloatStateOf(1f) }
     var isScrubbing by remember(item.uri) { mutableStateOf(false) }
     var resumeAfterScrubbing by remember(item.uri) { mutableStateOf(false) }
@@ -4960,9 +4961,7 @@ private fun MultiMediaPane(
                 }
 
                 override fun onEvents(player: Player, events: Player.Events) {
-                    duration = player.duration
-                        .takeIf { it > 0L && it != C.TIME_UNSET }
-                        ?: 0L
+                    duration = player.effectiveDurationMillis(fallbackDurationMillis)
                     currentPosition = player.currentPosition.coerceAtLeast(0L)
                 }
             }
@@ -4982,9 +4981,7 @@ private fun MultiMediaPane(
     LaunchedEffect(player) {
         player ?: return@LaunchedEffect
         while (true) {
-            duration = player.duration
-                .takeIf { it > 0L && it != C.TIME_UNSET }
-                ?: 0L
+            duration = player.effectiveDurationMillis(fallbackDurationMillis)
             if (!isScrubbing) {
                 currentPosition = player.currentPosition.coerceAtLeast(0L)
             }
@@ -5133,7 +5130,7 @@ private fun MultiMediaPane(
                         sourceItems.getOrNull(targetIndex)?.let(onSwitchItem)
                     },
                     durationMillis = {
-                        player?.duration?.takeIf { it > 0L && it != C.TIME_UNSET } ?: 0L
+                        player?.effectiveDurationMillis(fallbackDurationMillis) ?: fallbackDurationMillis
                     },
                 )
             },
@@ -5928,6 +5925,12 @@ private fun Player.refreshToneCurveVideoFrame() {
     seekTo(target)
 }
 
+private fun Player.effectiveDurationMillis(fallbackDurationMillis: Long = 0L): Long {
+    return duration
+        .takeIf { it > 0L && it != C.TIME_UNSET }
+        ?: fallbackDurationMillis.coerceAtLeast(0L)
+}
+
 @Composable
 private fun MediaSurface(
     item: MediaItem,
@@ -6067,6 +6070,7 @@ private fun VideoPlayer(
     val toneCurve = LocalToneCurve.current
     val colorAdjustments = LocalColorAdjustments.current
     val isToneCurveEditing = LocalToneCurveEditing.current
+    val fallbackDurationMillis = item.durationMillis?.takeIf { it > 0L } ?: 0L
     val currentItem by rememberUpdatedState(item)
     val currentPlaybackStateChange by rememberUpdatedState(onPlaybackStateChange)
     val coroutineScope = rememberCoroutineScope()
@@ -6075,7 +6079,7 @@ private fun VideoPlayer(
     var currentPosition by remember(item.uri) {
         mutableStateOf(initialPlaybackPositionMillis.coerceAtLeast(0L))
     }
-    var duration by remember(item.uri) { mutableStateOf(0L) }
+    var duration by remember(item.uri) { mutableStateOf(fallbackDurationMillis) }
     var controlsVisible by remember(item.uri) { mutableStateOf(ViewerUiSpec.CONTROLS_VISIBLE_BY_DEFAULT) }
     var playbackSpeed by remember(item.uri) { mutableFloatStateOf(1f) }
     var seekFeedbackText by remember(item.uri) { mutableStateOf<String?>(null) }
@@ -6145,7 +6149,7 @@ private fun VideoPlayer(
             }
 
             override fun onEvents(player: Player, events: Player.Events) {
-                duration = player.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
+                duration = player.effectiveDurationMillis(fallbackDurationMillis)
                 currentPosition = player.currentPosition.coerceAtLeast(0L)
             }
         }
@@ -6153,9 +6157,9 @@ private fun VideoPlayer(
         onDispose { player.removeListener(listener) }
     }
 
-    LaunchedEffect(player) {
+    LaunchedEffect(player, item.uri, fallbackDurationMillis) {
         while (true) {
-            duration = player.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
+            duration = player.effectiveDurationMillis(fallbackDurationMillis)
             currentPosition = player.currentPosition.coerceAtLeast(0L)
             currentPlaybackStateChange?.invoke(currentPosition, player.playWhenReady)
             activeSegment?.takeIf { !isScrubbing }?.let { segment ->
@@ -6303,7 +6307,7 @@ private fun VideoPlayer(
                         },
                         onHorizontalSwipe = { seekOffset ->
                             val targetPosition = (horizontalSeekBasePosition + seekOffset)
-                                .coerceIn(0L, duration.coerceAtLeast(0L))
+                                .coerceIn(0L, duration.coerceAtLeast(fallbackDurationMillis))
                             player.seekTo(targetPosition)
                             currentPosition = targetPosition
                             horizontalSeekOffset = seekOffset
@@ -6320,7 +6324,7 @@ private fun VideoPlayer(
                             resumeAfterHorizontalSeek = false
                         },
                         onVerticalSwipe = {},
-                        durationMillis = { duration },
+                        durationMillis = { duration.coerceAtLeast(fallbackDurationMillis) },
                     )
                 },
         )

@@ -6,6 +6,7 @@
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.2.20-blue)
 ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-2025.05.01-blue)
 ![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
+![License](https://img.shields.io/badge/License-MIT-green)
 
 VideoSee is an Android-only local photo and video browser built with Kotlin, Jetpack Compose, Media3, and Coil. It is designed for personal media browsing: folder, author, and tag collections, fast fullscreen viewing, 1-3 heart ratings for authors and individual media, manual JSON backups for heart and tag data, and LAN downloads from a laptop-side media service.
 
@@ -29,6 +30,7 @@ VideoSee is an Android-only local photo and video browser built with Kotlin, Jet
 - Fullscreen button areas avoid taking over tiny touch movements too early, reducing missed immediate taps on tags or hearts.
 - Swipe up or down in fullscreen to move to the previous or next item. At the first or last item, the first extra swipe shows a boundary hint, and a second swipe in the same direction wraps to the other end.
 - For videos, double-tap anywhere on the fullscreen surface to play or pause, and swipe left/right by distance to seek quickly.
+- When the player has not reported video duration yet, the viewer falls back to media metadata so fullscreen and multi-pane progress and seeking remain available.
 - Video controls include a seek bar, current/total time, fixed playback speeds (`0.7x`, `0.9x`, `1.2x`, `1.5x`), and named video segments.
 - Fullscreen viewing includes tone-curve and brightness/contrast-style color controls with saved presets.
 - Capture the current video frame to `Pictures/VideoSee`.
@@ -143,4 +145,4 @@ The current `.gitignore` excludes local machine config, Gradle/Kotlin caches, bu
 
 ## License
 
-This repository does not currently declare a license. Add a `LICENSE` file before publishing if you want others to know how they may use the code.
+This project is licensed under the [MIT License](LICENSE).

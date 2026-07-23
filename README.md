@@ -6,6 +6,7 @@
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.2.20-blue)
 ![Jetpack Compose](https://img.shields.io/badge/Jetpack%20Compose-2025.05.01-blue)
 ![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
+![License](https://img.shields.io/badge/License-MIT-green)
 
 VideoSee 是一个面向 Android 的本地图片和视频查看器。它使用 Kotlin、Jetpack Compose、Media3 和 Coil 构建，重点服务个人媒体浏览：按文件夹、作者或标签查看，快速全屏预览，给作者和单个媒体打爱心等级，手动备份爱心与标签数据，并从同一局域网里的笔记本下载手机端还没有的媒体。
 
@@ -29,6 +30,7 @@ VideoSee 是一个面向 Android 的本地图片和视频查看器。它使用 K
 - 全屏按钮区域优化了触摸手势优先级，减少刚进入媒体时点击标签或爱心失效的情况。
 - 全屏查看支持上滑/下滑切换上一个或下一个媒体；到达第一张或最后一张时第一次提示边界，再次同方向滑动会循环到另一端。
 - 视频全屏支持双击播放/暂停，左右滑按距离快速定位；手势在整个全屏界面生效，包括视频上下的黑色区域。
+- 当播放器暂未返回视频时长时，会使用媒体元数据回退时长，确保全屏和多媒体窗格的进度与拖动定位可用。
 - 视频支持进度条拖动、当前时间/总时长显示、`0.7x`、`0.9x`、`1.2x`、`1.5x` 固定倍速播放，以及片段标记和命名。
 - 全屏提供色调曲线、亮度/对比度等颜色调整和可保存的预设。
 - 视频支持当前画面截图，截图保存到系统图片库 `Pictures/VideoSee`。
@@ -143,4 +145,4 @@ rg -n --hidden --glob '!.git' --glob '!**/build/**' --glob '!.gradle/**' --glob 
 
 ## 许可证
 
-当前仓库还没有声明许可证。公开发布前请根据你的用途补充 `LICENSE` 文件。
+本项目采用 [MIT 许可证](LICENSE)。
