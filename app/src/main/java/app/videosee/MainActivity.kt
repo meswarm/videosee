@@ -80,6 +80,8 @@ import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Repeat
@@ -252,6 +254,7 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
     var multiMediaSession by remember { mutableStateOf<MultiMediaSession?>(null) }
     var isMultiMediaFullscreen by remember { mutableStateOf(false) }
     var temporarySinglePaneSlot by remember { mutableStateOf<MultiMediaSlot?>(null) }
+    var videoRotationLockState by remember { mutableStateOf(VideoRotationLockState()) }
     val playbackAdjustmentStore = remember(context) { PlaybackAdjustmentStore(context) }
     var toneCurve by remember(playbackAdjustmentStore) {
         mutableStateOf(playbackAdjustmentStore.loadToneCurve())
@@ -542,6 +545,16 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
             playbackAdjustmentStore.saveColorAdjustments(it)
         },
         onDismissColorAdjustments = { isColorAdjustmentPanelVisible = false },
+        videoRotationLockState = videoRotationLockState,
+        onLockVideoRotation = { degrees ->
+            videoRotationLockState = VideoRotationLockState(
+                defaultDegrees = normalizeRotationDegrees(degrees),
+                isLocked = true,
+            )
+        },
+        onUnlockVideoRotation = {
+            videoRotationLockState = videoRotationLockState.copy(isLocked = false)
+        },
         selectedMediaUrisForDelete = selectedMediaUrisForDelete,
         onSelectedMediaUrisForDeleteChange = { selectedMediaUrisForDelete = it },
         onDeleteMediaUris = { uris ->
@@ -676,6 +689,9 @@ private fun VideoSeeApp(
     onOpenColorAdjustments: () -> Unit,
     onColorAdjustmentsChange: (ColorAdjustments) -> Unit,
     onDismissColorAdjustments: () -> Unit,
+    videoRotationLockState: VideoRotationLockState,
+    onLockVideoRotation: (Int) -> Unit,
+    onUnlockVideoRotation: () -> Unit,
     selectedMediaUrisForDelete: Set<String>,
     onSelectedMediaUrisForDeleteChange: (Set<String>) -> Unit,
     onDeleteMediaUris: (Set<String>) -> Unit,
@@ -781,6 +797,9 @@ private fun VideoSeeApp(
                 onToneCurveChange = onToneCurveChange,
                 onOpenColorAdjustments = onOpenColorAdjustments,
                 onColorAdjustmentsChange = onColorAdjustmentsChange,
+                videoRotationLockState = videoRotationLockState,
+                onLockVideoRotation = onLockVideoRotation,
+                onUnlockVideoRotation = onUnlockVideoRotation,
             )
         }
         val temporarySinglePane = temporarySinglePaneSlot?.let { slot ->
@@ -852,6 +871,9 @@ private fun VideoSeeApp(
                 onToneCurveChange = onToneCurveChange,
                 onOpenColorAdjustments = onOpenColorAdjustments,
                 onColorAdjustmentsChange = onColorAdjustmentsChange,
+                videoRotationLockState = videoRotationLockState,
+                onLockVideoRotation = onLockVideoRotation,
+                onUnlockVideoRotation = onUnlockVideoRotation,
             )
         }
         multiMediaSession?.takeIf { isMultiMediaFullscreen && temporarySinglePane == null }?.let { session ->
@@ -866,6 +888,9 @@ private fun VideoSeeApp(
                 onPanePlaybackStateChange = onUpdateMultiMediaPlayback,
                 onOpenTemporarySingleMedia = onOpenTemporarySingleMedia,
                 onOpenToneCurve = onOpenToneCurve,
+                videoRotationLockState = videoRotationLockState,
+                onLockVideoRotation = onLockVideoRotation,
+                onUnlockVideoRotation = onUnlockVideoRotation,
                 onExit = onExitMultiMediaMode,
             )
         }
@@ -873,6 +898,7 @@ private fun VideoSeeApp(
             FloatingMultiMediaWindow(
                 session = session,
                 onPaneItemChange = onUpdateMultiMedia,
+                videoRotationLockState = videoRotationLockState,
                 onOpen = onOpenMultiMediaMode,
                 onClose = onExitMultiMediaMode,
             )
@@ -1884,22 +1910,52 @@ private fun ViewerRotateButton(
     modifier: Modifier = Modifier,
     size: Dp = 48.dp,
     iconSize: Dp = 25.dp,
+    lockSize: Dp = 18.dp,
+    isLockActive: Boolean = false,
+    onLockClick: (() -> Unit)? = null,
 ) {
     Box(
-        modifier = modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(Color(0x664AA8FF))
-            .border(1.dp, Color(0xAA9FD3FF), CircleShape)
-            .clickable { onClick() },
-        contentAlignment = Alignment.Center,
+        modifier = modifier.size(size),
     ) {
-        Icon(
-            imageVector = Icons.AutoMirrored.Rounded.RotateRight,
-            contentDescription = "顺时针旋转 90 度",
-            modifier = Modifier.size(iconSize),
-            tint = Color(0xFFE3F2FF),
-        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(CircleShape)
+                .background(Color(0x664AA8FF))
+                .border(1.dp, Color(0xAA9FD3FF), CircleShape)
+                .clickable { onClick() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.RotateRight,
+                contentDescription = "旋转媒体",
+                modifier = Modifier.size(iconSize),
+                tint = Color(0xFFE3F2FF),
+            )
+        }
+        if (onLockClick != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .size(lockSize)
+                    .clip(CircleShape)
+                    .background(if (isLockActive) Color(0x99D93025) else Color(0x664AA8FF))
+                    .border(
+                        1.dp,
+                        if (isLockActive) Color(0xBBFFAAA5) else Color(0xAA9FD3FF),
+                        CircleShape,
+                    )
+                    .clickable { onLockClick() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (isLockActive) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
+                    contentDescription = if (isLockActive) "取消锁定默认旋转角度" else "锁定默认旋转角度",
+                    modifier = Modifier.size(lockSize * 0.62f),
+                    tint = Color.White,
+                )
+            }
+        }
     }
 }
 
@@ -2707,6 +2763,9 @@ private fun MediaViewer(
     onToneCurveChange: (ToneCurve) -> Unit,
     onOpenColorAdjustments: () -> Unit,
     onColorAdjustmentsChange: (ColorAdjustments) -> Unit,
+    videoRotationLockState: VideoRotationLockState,
+    onLockVideoRotation: (Int) -> Unit,
+    onUnlockVideoRotation: () -> Unit,
     showDeleteAction: Boolean = true,
     onReturnToMultiVideo: (() -> Unit)? = null,
     initialPlaybackPositionMillis: Long = 0L,
@@ -2722,8 +2781,12 @@ private fun MediaViewer(
     var offsetY by remember { mutableFloatStateOf(0f) }
     var armedBoundaryIntent by remember { mutableStateOf<SwipeIntent?>(null) }
     var boundaryFeedbackText by remember { mutableStateOf<String?>(null) }
-    var videoRotationDegrees by remember(item.uri) { mutableStateOf(0) }
-    var hasVideoRotationStarted by remember(item.uri) { mutableStateOf(false) }
+    var videoRotationDegrees by remember(item.uri) {
+        mutableStateOf(if (videoRotationLockState.isLocked) videoRotationLockState.defaultDegrees else 0)
+    }
+    var hasVideoRotationStarted by remember(item.uri) {
+        mutableStateOf(videoRotationDegrees != 0)
+    }
 
     LaunchedEffect(item.uri) {
         if (!hasInitializedViewerItem) {
@@ -2734,6 +2797,13 @@ private fun MediaViewer(
         }
         offsetX = 0f
         offsetY = 0f
+    }
+
+    LaunchedEffect(item.uri, videoRotationLockState.defaultDegrees, videoRotationLockState.isLocked) {
+        if (videoRotationLockState.isLocked && item.mediaType.supportsManualRotation) {
+            videoRotationDegrees = videoRotationLockState.defaultDegrees
+            hasVideoRotationStarted = videoRotationDegrees != 0
+        }
     }
 
     LaunchedEffect(scale) {
@@ -2934,14 +3004,25 @@ private fun MediaViewer(
             )
         }
         if (showDeleteAction) {
-            if (item.mediaType == MediaType.Video) {
+            if (item.mediaType.supportsManualRotation) {
                 ViewerRotateButton(
                     onClick = {
+                        if (videoRotationLockState.isLocked) {
+                            onUnlockVideoRotation()
+                        }
                         videoRotationDegrees = nextVideoRotationDegrees(
                             currentDegrees = videoRotationDegrees,
                             hasStarted = hasVideoRotationStarted,
                         )
                         hasVideoRotationStarted = true
+                    },
+                    isLockActive = videoRotationLockState.isLocked,
+                    onLockClick = {
+                        if (videoRotationLockState.isLocked) {
+                            onUnlockVideoRotation()
+                        } else {
+                            onLockVideoRotation(videoRotationDegrees)
+                        }
                     },
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -4304,6 +4385,9 @@ private fun MultiMediaViewer(
     onPanePlaybackStateChange: (MultiMediaSlot, Long, Boolean, Float) -> Unit,
     onOpenTemporarySingleMedia: (MultiMediaSlot, Long, Boolean, Float) -> Unit,
     onOpenToneCurve: () -> Unit,
+    videoRotationLockState: VideoRotationLockState,
+    onLockVideoRotation: (Int) -> Unit,
+    onUnlockVideoRotation: () -> Unit,
     onExit: () -> Unit,
 ) {
     var topPaneFraction by remember { mutableFloatStateOf(0.5f) }
@@ -4343,6 +4427,9 @@ private fun MultiMediaViewer(
                 },
                 onOpenTemporarySingleMedia = onOpenTemporarySingleMedia,
                 videoSegmentsByUri = videoSegmentsByUri,
+                videoRotationLockState = videoRotationLockState,
+                onLockVideoRotation = onLockVideoRotation,
+                onUnlockVideoRotation = onUnlockVideoRotation,
                 modifier = Modifier.weight(topPaneFraction),
             )
             Box(
@@ -4391,6 +4478,9 @@ private fun MultiMediaViewer(
                 },
                 onOpenTemporarySingleMedia = onOpenTemporarySingleMedia,
                 videoSegmentsByUri = videoSegmentsByUri,
+                videoRotationLockState = videoRotationLockState,
+                onLockVideoRotation = onLockVideoRotation,
+                onUnlockVideoRotation = onUnlockVideoRotation,
                 modifier = Modifier.weight(1f - topPaneFraction),
             )
         }
@@ -4435,6 +4525,9 @@ private fun MultiMediaRow(
     onPanePlaybackSnapshot: (MultiMediaSlot, Long, Boolean, Float) -> Unit,
     onOpenTemporarySingleMedia: (MultiMediaSlot, Long, Boolean, Float) -> Unit,
     videoSegmentsByUri: Map<String, List<VideoSegment>>,
+    videoRotationLockState: VideoRotationLockState,
+    onLockVideoRotation: (Int) -> Unit,
+    onUnlockVideoRotation: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (!isRightExpanded) {
@@ -4457,6 +4550,9 @@ private fun MultiMediaRow(
                 onSelectNewMedia = { onPickMediaSlot(leftSlot) },
                 onRemove = { onRemoveMediaSlot(leftSlot) },
                 videoSegmentsByUri = videoSegmentsByUri,
+                videoRotationLockState = videoRotationLockState,
+                onLockVideoRotation = onLockVideoRotation,
+                onUnlockVideoRotation = onUnlockVideoRotation,
                 modifier = Modifier.fillMaxSize(),
             )
             MultiMediaRowAddButton(
@@ -4491,6 +4587,9 @@ private fun MultiMediaRow(
                 onSelectNewMedia = { onPickMediaSlot(leftSlot) },
                 onRemove = { onRemoveMediaSlot(leftSlot) },
                 videoSegmentsByUri = videoSegmentsByUri,
+                videoRotationLockState = videoRotationLockState,
+                onLockVideoRotation = onLockVideoRotation,
+                onUnlockVideoRotation = onUnlockVideoRotation,
                 modifier = Modifier
                     .weight(leftFraction)
                     .fillMaxHeight(),
@@ -4539,6 +4638,9 @@ private fun MultiMediaRow(
                 onSelectNewMedia = { onPickMediaSlot(rightSlot) },
                 onRemove = { onRemoveMediaSlot(rightSlot) },
                 videoSegmentsByUri = videoSegmentsByUri,
+                videoRotationLockState = videoRotationLockState,
+                onLockVideoRotation = onLockVideoRotation,
+                onUnlockVideoRotation = onUnlockVideoRotation,
                 modifier = Modifier
                     .weight(1f - leftFraction)
                     .fillMaxHeight(),
@@ -4590,6 +4692,9 @@ private fun MultiMediaPaneOrEmpty(
     onSelectNewMedia: () -> Unit,
     onRemove: () -> Unit,
     videoSegmentsByUri: Map<String, List<VideoSegment>>,
+    videoRotationLockState: VideoRotationLockState,
+    onLockVideoRotation: (Int) -> Unit,
+    onUnlockVideoRotation: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     pane?.let { selectedPane ->
@@ -4607,6 +4712,9 @@ private fun MultiMediaPaneOrEmpty(
             onOpenTemporarySingle = onOpenTemporarySingle,
             onSelectNewMedia = onSelectNewMedia,
             onRemove = onRemove,
+            videoRotationLockState = videoRotationLockState,
+            onLockVideoRotation = onLockVideoRotation,
+            onUnlockVideoRotation = onUnlockVideoRotation,
             modifier = modifier,
         )
     } ?: MultiMediaEmptyPane(
@@ -4740,6 +4848,7 @@ private data class MultiMediaPlaybackSnapshot(
 private fun FloatingMultiMediaWindow(
     session: MultiMediaSession,
     onPaneItemChange: (MultiMediaSlot, MediaItem) -> Unit,
+    videoRotationLockState: VideoRotationLockState,
     onOpen: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -4784,6 +4893,7 @@ private fun FloatingMultiMediaWindow(
                     leftSlot = MultiMediaSlot.TopLeft,
                     rightSlot = MultiMediaSlot.TopRight,
                     onPaneItemChange = onPaneItemChange,
+                    videoRotationLockState = videoRotationLockState,
                     modifier = Modifier.weight(1f),
                 )
                 Box(Modifier.fillMaxWidth().height(4.dp).background(Color(0x99FFFFFF)))
@@ -4794,6 +4904,7 @@ private fun FloatingMultiMediaWindow(
                     leftSlot = MultiMediaSlot.BottomLeft,
                     rightSlot = MultiMediaSlot.BottomRight,
                     onPaneItemChange = onPaneItemChange,
+                    videoRotationLockState = videoRotationLockState,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -4850,6 +4961,7 @@ private fun FloatingMultiMediaRow(
     leftSlot: MultiMediaSlot,
     rightSlot: MultiMediaSlot,
     onPaneItemChange: (MultiMediaSlot, MediaItem) -> Unit,
+    videoRotationLockState: VideoRotationLockState,
     modifier: Modifier = Modifier,
 ) {
     if (!isRightExpanded) {
@@ -4857,6 +4969,7 @@ private fun FloatingMultiMediaRow(
             pane = leftPane,
             slot = leftSlot,
             onPaneItemChange = onPaneItemChange,
+            videoRotationLockState = videoRotationLockState,
             modifier = modifier.fillMaxWidth(),
         )
         return
@@ -4866,6 +4979,7 @@ private fun FloatingMultiMediaRow(
             pane = leftPane,
             slot = leftSlot,
             onPaneItemChange = onPaneItemChange,
+            videoRotationLockState = videoRotationLockState,
             modifier = Modifier.weight(0.68f),
         )
         Box(Modifier.width(3.dp).fillMaxHeight().background(Color(0x99FFFFFF)))
@@ -4873,6 +4987,7 @@ private fun FloatingMultiMediaRow(
             pane = rightPane,
             slot = rightSlot,
             onPaneItemChange = onPaneItemChange,
+            videoRotationLockState = videoRotationLockState,
             modifier = Modifier.weight(0.32f),
         )
     }
@@ -4883,6 +4998,7 @@ private fun FloatingMultiMediaPreview(
     pane: MultiMediaPaneSession?,
     slot: MultiMediaSlot,
     onPaneItemChange: (MultiMediaSlot, MediaItem) -> Unit,
+    videoRotationLockState: VideoRotationLockState,
     modifier: Modifier = Modifier,
 ) {
     pane?.let { selectedPane ->
@@ -4891,6 +5007,7 @@ private fun FloatingMultiMediaPreview(
             sourceItems = selectedPane.sourceItems,
             onSwitchItem = { onPaneItemChange(slot, it) },
             showControls = false,
+            videoRotationLockState = videoRotationLockState,
             modifier = modifier,
         )
     } ?: Box(
@@ -4944,6 +5061,9 @@ private fun MultiMediaPane(
     onOpenTemporarySingle: ((Long, Boolean, Float) -> Unit)? = null,
     onSelectNewMedia: (() -> Unit)? = null,
     onRemove: (() -> Unit)? = null,
+    videoRotationLockState: VideoRotationLockState = VideoRotationLockState(),
+    onLockVideoRotation: (Int) -> Unit = {},
+    onUnlockVideoRotation: () -> Unit = {},
     showControls: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
@@ -4966,8 +5086,12 @@ private fun MultiMediaPane(
     var resumeAfterScrubbing by remember(item.uri) { mutableStateOf(false) }
     var activeSegment by remember(item.uri) { mutableStateOf<VideoSegment?>(null) }
     var isMuted by remember(item.uri) { mutableStateOf(false) }
-    var videoRotationDegrees by remember(item.uri) { mutableStateOf(0) }
-    var hasVideoRotationStarted by remember(item.uri) { mutableStateOf(false) }
+    var videoRotationDegrees by remember(item.uri) {
+        mutableStateOf(if (videoRotationLockState.isLocked) videoRotationLockState.defaultDegrees else 0)
+    }
+    var hasVideoRotationStarted by remember(item.uri) {
+        mutableStateOf(videoRotationDegrees != 0)
+    }
     var controlsAutoHideToken by remember(item.uri) { mutableStateOf(0) }
     var suppressNextControlsTap by remember(item.uri) { mutableStateOf(false) }
     var controlsTapGuardToken by remember(item.uri) { mutableStateOf(0) }
@@ -5117,6 +5241,13 @@ private fun MultiMediaPane(
 
     LaunchedEffect(player, isMuted) {
         player?.volume = if (isMuted) 0f else 1f
+    }
+
+    LaunchedEffect(item.uri, videoRotationLockState.defaultDegrees, videoRotationLockState.isLocked) {
+        if (videoRotationLockState.isLocked && item.mediaType.supportsManualRotation) {
+            videoRotationDegrees = videoRotationLockState.defaultDegrees
+            hasVideoRotationStarted = videoRotationDegrees != 0
+        }
     }
 
     LaunchedEffect(controlsAutoHideToken) {
@@ -5311,18 +5442,32 @@ private fun MultiMediaPane(
                         )
                     }
                 }
-                if (player != null) {
+                if (item.mediaType.supportsManualRotation) {
                     ViewerRotateButton(
                         onClick = {
+                            if (videoRotationLockState.isLocked) {
+                                onUnlockVideoRotation()
+                            }
                             videoRotationDegrees = nextVideoRotationDegrees(
                                 currentDegrees = videoRotationDegrees,
                                 hasStarted = hasVideoRotationStarted,
                             )
                             hasVideoRotationStarted = true
                         },
+                        isLockActive = videoRotationLockState.isLocked,
+                        onLockClick = {
+                            if (videoRotationLockState.isLocked) {
+                                onUnlockVideoRotation()
+                            } else {
+                                onLockVideoRotation(videoRotationDegrees)
+                            }
+                        },
                         size = 24.dp,
                         iconSize = 14.dp,
+                        lockSize = 13.dp,
                     )
+                }
+                if (player != null) {
                     val muteBackground = if (isMuted) Color(0x66432127) else Color(0x5044A870)
                     val muteBorder = if (isMuted) Color(0x88FF9C9C) else Color(0x8890E0AC)
                     val muteTint = if (isMuted) Color(0xFFFFD0D0) else Color(0xFFD6FFE3)
@@ -6063,10 +6208,22 @@ private fun Player.effectiveDurationMillis(fallbackDurationMillis: Long = 0L): L
         ?: fallbackDurationMillis.coerceAtLeast(0L)
 }
 
+private data class VideoRotationLockState(
+    val defaultDegrees: Int = 0,
+    val isLocked: Boolean = false,
+)
+
 private fun nextVideoRotationDegrees(currentDegrees: Int, hasStarted: Boolean): Int {
-    val increment = if (hasStarted) 45 else 180
-    return ((currentDegrees + increment) % 360 + 360) % 360
+    val increment = if (hasStarted) 90 else 180
+    return normalizeRotationDegrees(currentDegrees + increment)
 }
+
+private fun normalizeRotationDegrees(degrees: Int): Int {
+    return ((degrees % 360) + 360) % 360
+}
+
+private val MediaType.supportsManualRotation: Boolean
+    get() = this == MediaType.Image || this == MediaType.Video
 
 @Composable
 private fun MediaSurface(
@@ -6119,6 +6276,7 @@ private fun MediaSurface(
             scale = scale,
             offsetX = offsetX,
             offsetY = offsetY,
+            rotationDegrees = videoRotationDegrees,
         ) {
             AsyncImage(
                 model = mediaImageModel(item),
