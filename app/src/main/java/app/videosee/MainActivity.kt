@@ -42,6 +42,8 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -61,22 +63,47 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.StarBorder
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -87,11 +114,20 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -106,17 +142,29 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.C
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem.fromUri
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
+import androidx.media3.effect.ConvolutionFunction1D
+import androidx.media3.effect.SeparableConvolution
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.effect.SingleColorLut
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import app.videosee.domain.MediaFolder
@@ -130,7 +178,6 @@ import app.videosee.ui.PlaybackSpeedOptions
 import app.videosee.ui.GridReturnFocus
 import app.videosee.ui.PlaybackTimeFormatter
 import app.videosee.ui.SwipeIntent
-import app.videosee.ui.SwipeTransitionSpec
 import app.videosee.ui.VideoSeekGesture
 import app.videosee.ui.VideoSnapshotFileName
 import app.videosee.ui.ViewerUiSpec
@@ -139,9 +186,14 @@ import coil3.request.ImageRequest
 import coil3.video.videoFrameMillis
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.Locale
+import java.util.UUID
 import java.io.File
 import kotlin.math.roundToInt
 
@@ -149,25 +201,41 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            VideoSeeTheme {
-                VideoSeeRoute()
-            }
+            VideoSeeRoute()
         }
     }
 }
 
 @Composable
-private fun VideoSeeTheme(content: @Composable () -> Unit) {
+private fun VideoSeeTheme(theme: AppTheme, content: @Composable () -> Unit) {
+    val palette = when (theme) {
+        AppTheme.Midnight -> darkColorScheme(
+            background = Color(0xFF101827), surface = Color(0xFF172033), surfaceVariant = Color(0xFF24314A),
+            primary = Color(0xFF7DD3FC), onBackground = Color(0xFFEAF2FF), onSurface = Color(0xFFEAF2FF), onSurfaceVariant = Color(0xFFAAB8D0),
+        )
+        AppTheme.Graphite -> darkColorScheme(
+            background = Color(0xFF171717), surface = Color(0xFF202020), surfaceVariant = Color(0xFF303030),
+            primary = Color(0xFFD4D4D4), onBackground = Color(0xFFF4F4F5), onSurface = Color(0xFFF4F4F5), onSurfaceVariant = Color(0xFFA1A1AA),
+        )
+        AppTheme.Forest -> darkColorScheme(
+            background = Color(0xFF0E1B17), surface = Color(0xFF14251F), surfaceVariant = Color(0xFF203A30),
+            primary = Color(0xFF6EE7B7), onBackground = Color(0xFFE7F8EF), onSurface = Color(0xFFE7F8EF), onSurfaceVariant = Color(0xFFA8C7B7),
+        )
+        AppTheme.Snow -> lightColorScheme(
+            background = Color(0xFFFAFAFA), surface = Color(0xFFFFFFFF), surfaceVariant = Color(0xFFF1F5F9),
+            primary = Color(0xFF2563EB), onBackground = Color(0xFF172033), onSurface = Color(0xFF172033), onSurfaceVariant = Color(0xFF64748B),
+        )
+        AppTheme.Mist -> lightColorScheme(
+            background = Color(0xFFF9F7FF), surface = Color(0xFFFFFFFF), surfaceVariant = Color(0xFFF0EBFA),
+            primary = Color(0xFF7C3AED), onBackground = Color(0xFF251B35), onSurface = Color(0xFF251B35), onSurfaceVariant = Color(0xFF776B8B),
+        )
+        AppTheme.Sand -> lightColorScheme(
+            background = Color(0xFFFFFBF5), surface = Color(0xFFFFFFFF), surfaceVariant = Color(0xFFF7EEDF),
+            primary = Color(0xFFB45309), onBackground = Color(0xFF302015), onSurface = Color(0xFF302015), onSurfaceVariant = Color(0xFF816B58),
+        )
+    }
     MaterialTheme(
-        colorScheme = darkColorScheme(
-            background = Color(0xFF120F1A),
-            surface = Color(0xFF181321),
-            surfaceVariant = Color(0xFF241D31),
-            primary = Color(0xFF3DDC84),
-            onBackground = Color(0xFFE8EAED),
-            onSurface = Color(0xFFE8EAED),
-            onSurfaceVariant = Color(0xFFAEB4BD),
-        ),
+        colorScheme = palette,
         content = content,
     )
 }
@@ -178,6 +246,18 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
     val coroutineScope = rememberCoroutineScope()
     val state by viewModel.uiState.collectAsState()
     var selectedMediaUrisForDelete by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var multiMediaSession by remember { mutableStateOf<MultiMediaSession?>(null) }
+    var isMultiMediaFullscreen by remember { mutableStateOf(false) }
+    var temporarySinglePaneSlot by remember { mutableStateOf<MultiMediaSlot?>(null) }
+    val playbackAdjustmentStore = remember(context) { PlaybackAdjustmentStore(context) }
+    var toneCurve by remember(playbackAdjustmentStore) {
+        mutableStateOf(playbackAdjustmentStore.loadToneCurve())
+    }
+    var isToneCurvePanelVisible by remember { mutableStateOf(false) }
+    var colorAdjustments by remember(playbackAdjustmentStore) {
+        mutableStateOf(playbackAdjustmentStore.loadColorAdjustments())
+    }
+    var isColorAdjustmentPanelVisible by remember { mutableStateOf(false) }
     var pendingDeleteUris by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingViewerDeleteTargetUri by remember { mutableStateOf<String?>(null) }
     var backupTransferKind by remember { mutableStateOf("all") }
@@ -263,12 +343,19 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
         }
     }
 
+    CompositionLocalProvider(
+        LocalToneCurve provides toneCurve,
+        LocalColorAdjustments provides colorAdjustments,
+        LocalToneCurveEditing provides (isToneCurvePanelVisible || isColorAdjustmentPanelVisible),
+    ) {
+    VideoSeeTheme(theme = state.appTheme) {
     VideoSeeApp(
         state = state,
         onRequestPermission = { launcher.launch(requiredPermissions()) },
         onSelectFolder = viewModel::selectFolder,
         onSelectAuthor = viewModel::selectAuthor,
         onSelectTag = viewModel::selectTag,
+        onSelectFavoriteFolder = viewModel::selectFavoriteFolder,
         onSelectBrowserMode = viewModel::selectBrowserMode,
         onCollectionSearchQueryChange = viewModel::updateCollectionSearchQuery,
         onSelectCollectionSortField = viewModel::selectCollectionSortField,
@@ -278,15 +365,43 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
         onToggleMediaSortDirection = viewModel::toggleMediaSortDirection,
         onSetMediaFavoriteLevel = viewModel::setMediaFavoriteLevel,
         onEnsureVideoThumbnail = viewModel::ensureVideoThumbnail,
-        onOpenItem = viewModel::openViewer,
+        onOpenItem = { selectedItem ->
+            val session = multiMediaSession
+            val pendingSlot = session?.pendingSlot
+            if (pendingSlot != null) {
+                multiMediaSession = session.withPane(
+                    slot = pendingSlot,
+                    pane = session.pane(pendingSlot)?.copy(
+                        item = selectedItem,
+                        sourceItems = state.selectedItems,
+                        playbackPositionMillis = 0L,
+                        playWhenReady = true,
+                    ) ?: MultiMediaPaneSession(
+                        item = selectedItem,
+                        sourceItems = state.selectedItems,
+                    ),
+                ).copy(pendingSlot = null)
+                isMultiMediaFullscreen = true
+            } else {
+                viewModel.openViewer(selectedItem)
+            }
+        },
         onCloseViewer = viewModel::closeViewer,
         onNext = viewModel::showNext,
         onPrevious = viewModel::showPrevious,
         onFirst = viewModel::showFirst,
         onLast = viewModel::showLast,
+        onTogglePlaybackMode = viewModel::togglePlaybackMode,
+        onAddVideoSegment = viewModel::addVideoSegment,
+        onDeleteVideoSegment = viewModel::deleteVideoSegment,
+        onRenameVideoSegment = viewModel::renameVideoSegment,
+        onOpenAuthorSearch = viewModel::openAuthorSearch,
         onRefresh = viewModel::refresh,
+        onOpenSettings = viewModel::openSettingsPane,
+        onOpenTagSettings = viewModel::openTagSettingsPane,
         onOpenSync = viewModel::openSyncPane,
         onOpenBackup = viewModel::openBackupPane,
+        onSelectAppTheme = viewModel::selectAppTheme,
         onSyncHostChange = viewModel::updateSyncHost,
         onSyncPortChange = viewModel::updateSyncPort,
         onSyncTokenChange = viewModel::updateSyncToken,
@@ -297,7 +412,133 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
         onAddTag = viewModel::addTag,
         onDeleteTag = viewModel::deleteTag,
         onToggleMediaTag = viewModel::toggleMediaTag,
+        onCreateFavoriteFolder = viewModel::createFavoriteFolder,
+        onRenameFavoriteFolder = viewModel::renameFavoriteFolder,
+        onSetDefaultFavoriteFolder = viewModel::setDefaultFavoriteFolder,
+        onToggleMediaInDefaultFavoriteFolder = viewModel::toggleMediaInDefaultFavoriteFolder,
         onGridReturnTargetHandled = viewModel::clearGridReturnTarget,
+        multiMediaSession = multiMediaSession,
+        isMultiMediaFullscreen = isMultiMediaFullscreen,
+        temporarySinglePaneSlot = temporarySinglePaneSlot,
+        onEnterMultiMediaMode = { currentItem ->
+            temporarySinglePaneSlot = null
+            multiMediaSession = MultiMediaSession(
+                topLeft = MultiMediaPaneSession(
+                    item = currentItem,
+                    sourceItems = state.selectedItems,
+                ),
+            )
+            isMultiMediaFullscreen = true
+        },
+        onPickMultiMediaSlotFromBrowser = { slot ->
+            multiMediaSession = multiMediaSession?.copy(pendingSlot = slot)
+            isMultiMediaFullscreen = false
+            viewModel.closeViewer()
+        },
+        onSearchMultiMediaAuthor = { slot, authorId ->
+            multiMediaSession = multiMediaSession?.copy(pendingSlot = slot)
+            viewModel.openAuthorSearch(authorId)
+            isMultiMediaFullscreen = false
+            viewModel.closeViewer()
+        },
+        onExpandMultiMediaSlot = { slot, playbackSnapshots ->
+            multiMediaSession = multiMediaSession
+                ?.withPanePlaybackSnapshots(playbackSnapshots)
+                ?.expandRightSlot(slot)
+        },
+        onRemoveMultiMediaSlot = { slot, playbackSnapshots ->
+            val updatedSession = multiMediaSession
+                ?.withPanePlaybackSnapshots(playbackSnapshots)
+                ?.removePane(slot)
+            if (updatedSession == null || updatedSession.isEmpty()) {
+                multiMediaSession = null
+                isMultiMediaFullscreen = false
+                viewModel.closeViewer()
+            } else {
+                multiMediaSession = updatedSession
+            }
+        },
+        onExitMultiMediaMode = {
+            multiMediaSession = null
+            isMultiMediaFullscreen = false
+            temporarySinglePaneSlot = null
+        },
+        onOpenMultiMediaMode = {
+            isMultiMediaFullscreen = true
+            multiMediaSession?.firstPane()?.item?.let(viewModel::openViewer)
+        },
+        onUpdateMultiMedia = { slot, item ->
+            multiMediaSession = multiMediaSession?.let { session ->
+                val currentPane = session.pane(slot) ?: return@let session
+                session.withPane(
+                    slot,
+                    currentPane.copy(
+                        item = item,
+                        playbackPositionMillis = 0L,
+                        playWhenReady = true,
+                        scale = currentPane.scale.takeIf { it < 1f } ?: 1f,
+                    ),
+                )
+            }
+        },
+        onUpdateMultiMediaPlayback = { slot, positionMillis, playWhenReady, scale ->
+            multiMediaSession = multiMediaSession?.withPanePlaybackState(
+                slot = slot,
+                positionMillis = positionMillis,
+                playWhenReady = playWhenReady,
+                scale = scale,
+            )
+        },
+        onOpenTemporarySingleMedia = { slot, positionMillis, playWhenReady, scale ->
+            multiMediaSession = multiMediaSession?.withPanePlaybackState(
+                slot = slot,
+                positionMillis = positionMillis,
+                playWhenReady = playWhenReady,
+                scale = scale,
+            )
+            temporarySinglePaneSlot = slot
+            isMultiMediaFullscreen = false
+        },
+        onReturnToMultiMedia = {
+            temporarySinglePaneSlot = null
+            isMultiMediaFullscreen = true
+        },
+        onUpdateTemporaryMultiMediaPlayback = { slot, itemUri, positionMillis, playWhenReady ->
+            multiMediaSession = multiMediaSession?.let { session ->
+                if (session.pane(slot)?.item?.uri != itemUri) session else {
+                    session.withPanePlaybackState(slot, positionMillis, playWhenReady)
+                }
+            }
+        },
+        onUpdateTemporaryMultiMediaScale = { slot, itemUri, scale ->
+            multiMediaSession = multiMediaSession?.let { session ->
+                if (session.pane(slot)?.item?.uri != itemUri) session else {
+                    session.withPaneScale(slot, scale)
+                }
+            }
+        },
+        toneCurve = toneCurve,
+        isToneCurvePanelVisible = isToneCurvePanelVisible,
+        colorAdjustments = colorAdjustments,
+        isColorAdjustmentPanelVisible = isColorAdjustmentPanelVisible,
+        onOpenToneCurve = {
+            isColorAdjustmentPanelVisible = false
+            isToneCurvePanelVisible = true
+        },
+        onToneCurveChange = {
+            toneCurve = it
+            playbackAdjustmentStore.saveToneCurve(it)
+        },
+        onDismissToneCurve = { isToneCurvePanelVisible = false },
+        onOpenColorAdjustments = {
+            isToneCurvePanelVisible = false
+            isColorAdjustmentPanelVisible = true
+        },
+        onColorAdjustmentsChange = {
+            colorAdjustments = it
+            playbackAdjustmentStore.saveColorAdjustments(it)
+        },
+        onDismissColorAdjustments = { isColorAdjustmentPanelVisible = false },
         selectedMediaUrisForDelete = selectedMediaUrisForDelete,
         onSelectedMediaUrisForDeleteChange = { selectedMediaUrisForDelete = it },
         onDeleteMediaUris = { uris ->
@@ -353,6 +594,8 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
             importLauncher.launch(arrayOf("application/json", "text/*", "application/octet-stream"))
         },
     )
+    }
+    }
 }
 
 @Composable
@@ -362,6 +605,7 @@ private fun VideoSeeApp(
     onSelectFolder: (String) -> Unit,
     onSelectAuthor: (String) -> Unit,
     onSelectTag: (String) -> Unit,
+    onSelectFavoriteFolder: (String) -> Unit,
     onSelectBrowserMode: (BrowserMode) -> Unit,
     onCollectionSearchQueryChange: (String) -> Unit,
     onSelectCollectionSortField: (CollectionSortField) -> Unit,
@@ -377,9 +621,17 @@ private fun VideoSeeApp(
     onPrevious: () -> Unit,
     onFirst: () -> Unit,
     onLast: () -> Unit,
+    onTogglePlaybackMode: () -> Unit,
+    onAddVideoSegment: (String, Long, Long) -> Unit,
+    onDeleteVideoSegment: (String, VideoSegment) -> Unit,
+    onRenameVideoSegment: (String, VideoSegment, String) -> Unit,
+    onOpenAuthorSearch: (String) -> Unit,
     onRefresh: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenTagSettings: () -> Unit,
     onOpenSync: () -> Unit,
     onOpenBackup: () -> Unit,
+    onSelectAppTheme: (AppTheme) -> Unit,
     onSyncHostChange: (String) -> Unit,
     onSyncPortChange: (String) -> Unit,
     onSyncTokenChange: (String) -> Unit,
@@ -390,7 +642,37 @@ private fun VideoSeeApp(
     onAddTag: (String) -> Unit,
     onDeleteTag: (String) -> Unit,
     onToggleMediaTag: (String, String) -> Unit,
+    onCreateFavoriteFolder: () -> Unit,
+    onRenameFavoriteFolder: (String, String) -> Unit,
+    onSetDefaultFavoriteFolder: (String) -> Unit,
+    onToggleMediaInDefaultFavoriteFolder: (String) -> Unit,
     onGridReturnTargetHandled: (String) -> Unit,
+    multiMediaSession: MultiMediaSession?,
+    isMultiMediaFullscreen: Boolean,
+    temporarySinglePaneSlot: MultiMediaSlot?,
+    onEnterMultiMediaMode: (MediaItem) -> Unit,
+    onPickMultiMediaSlotFromBrowser: (MultiMediaSlot) -> Unit,
+    onSearchMultiMediaAuthor: (MultiMediaSlot, String) -> Unit,
+    onExpandMultiMediaSlot: (MultiMediaSlot, Map<MultiMediaSlot, MultiMediaPlaybackSnapshot>) -> Unit,
+    onRemoveMultiMediaSlot: (MultiMediaSlot, Map<MultiMediaSlot, MultiMediaPlaybackSnapshot>) -> Unit,
+    onExitMultiMediaMode: () -> Unit,
+    onOpenMultiMediaMode: () -> Unit,
+    onUpdateMultiMedia: (MultiMediaSlot, MediaItem) -> Unit,
+    onUpdateMultiMediaPlayback: (MultiMediaSlot, Long, Boolean, Float) -> Unit,
+    onOpenTemporarySingleMedia: (MultiMediaSlot, Long, Boolean, Float) -> Unit,
+    onReturnToMultiMedia: () -> Unit,
+    onUpdateTemporaryMultiMediaPlayback: (MultiMediaSlot, String, Long, Boolean) -> Unit,
+    onUpdateTemporaryMultiMediaScale: (MultiMediaSlot, String, Float) -> Unit,
+    toneCurve: ToneCurve,
+    isToneCurvePanelVisible: Boolean,
+    colorAdjustments: ColorAdjustments,
+    isColorAdjustmentPanelVisible: Boolean,
+    onOpenToneCurve: () -> Unit,
+    onToneCurveChange: (ToneCurve) -> Unit,
+    onDismissToneCurve: () -> Unit,
+    onOpenColorAdjustments: () -> Unit,
+    onColorAdjustmentsChange: (ColorAdjustments) -> Unit,
+    onDismissColorAdjustments: () -> Unit,
     selectedMediaUrisForDelete: Set<String>,
     onSelectedMediaUrisForDeleteChange: (Set<String>) -> Unit,
     onDeleteMediaUris: (Set<String>) -> Unit,
@@ -423,6 +705,7 @@ private fun VideoSeeApp(
             onSelectFolder = onSelectFolder,
             onSelectAuthor = onSelectAuthor,
                     onSelectTag = onSelectTag,
+                    onSelectFavoriteFolder = onSelectFavoriteFolder,
                     onSelectBrowserMode = onSelectBrowserMode,
                     onCollectionSearchQueryChange = onCollectionSearchQueryChange,
                     onSelectCollectionSortField = onSelectCollectionSortField,
@@ -434,8 +717,11 @@ private fun VideoSeeApp(
                     onEnsureVideoThumbnail = onEnsureVideoThumbnail,
                     onOpenItem = onOpenItem,
                     onRefresh = onRefresh,
+                    onOpenSettings = onOpenSettings,
+                    onOpenTagSettings = onOpenTagSettings,
                     onOpenSync = onOpenSync,
                     onOpenBackup = onOpenBackup,
+                    onSelectAppTheme = onSelectAppTheme,
                     onSyncHostChange = onSyncHostChange,
                     onSyncPortChange = onSyncPortChange,
                     onSyncTokenChange = onSyncTokenChange,
@@ -445,6 +731,9 @@ private fun VideoSeeApp(
                     onDownloadAllSyncFiles = onDownloadAllSyncFiles,
                     onAddTag = onAddTag,
                     onDeleteTag = onDeleteTag,
+                    onCreateFavoriteFolder = onCreateFavoriteFolder,
+                    onRenameFavoriteFolder = onRenameFavoriteFolder,
+                    onSetDefaultFavoriteFolder = onSetDefaultFavoriteFolder,
                     onGridReturnTargetHandled = onGridReturnTargetHandled,
                     selectedMediaUrisForDelete = selectedMediaUrisForDelete,
                     onSelectedMediaUrisForDeleteChange = onSelectedMediaUrisForDeleteChange,
@@ -455,7 +744,7 @@ private fun VideoSeeApp(
             }
         }
 
-        state.viewerItem?.uri?.let { uri ->
+        state.viewerItem?.uri?.takeIf { multiMediaSession == null }?.let { uri ->
             val item = state.selectedItems.firstOrNull { media -> media.uri == uri } ?: return@let
             val viewerIndex = state.selectedItems.indexOfFirst { media -> media.uri == uri }
             val viewerDeleteTargetUri = state.selectedItems.getOrNull(viewerIndex + 1)?.uri
@@ -469,11 +758,134 @@ private fun VideoSeeApp(
                 onPrevious = onPrevious,
                 onFirst = onFirst,
                 onLast = onLast,
+                playbackMode = state.playbackMode,
+                onTogglePlaybackMode = onTogglePlaybackMode,
+                videoSegments = state.videoSegmentsByUri[item.uri].orEmpty(),
+                onAddVideoSegment = { start, end -> onAddVideoSegment(item.uri, start, end) },
+                onDeleteVideoSegment = { segment -> onDeleteVideoSegment(item.uri, segment) },
+                onRenameVideoSegment = { segment, name -> onRenameVideoSegment(item.uri, segment, name) },
+                onOpenAuthorSearch = onOpenAuthorSearch,
                 onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
+                isInDefaultFavoriteFolder = state.defaultFavoriteFolderId
+                    ?.let { item.uri in state.favoriteFolderMediaUris[it].orEmpty() } == true,
+                onToggleDefaultFavoriteFolder = { onToggleMediaInDefaultFavoriteFolder(item.uri) },
                 allTags = state.tags,
                 selectedTags = state.mediaTags[item.uri].orEmpty(),
                 onToggleMediaTag = { tagName -> onToggleMediaTag(item.uri, tagName) },
                 onDeleteCurrentMedia = { onDeleteViewerMedia(item.uri, viewerDeleteTargetUri) },
+                onEnterMultiVideoMode = { onEnterMultiMediaMode(item) },
+                onOpenToneCurve = onOpenToneCurve,
+                onToneCurveChange = onToneCurveChange,
+                onOpenColorAdjustments = onOpenColorAdjustments,
+                onColorAdjustmentsChange = onColorAdjustmentsChange,
+            )
+        }
+        val temporarySinglePane = temporarySinglePaneSlot?.let { slot ->
+            multiMediaSession?.pane(slot)?.let { pane -> slot to pane }
+        }
+        temporarySinglePane?.let { (slot, pane) ->
+            val temporaryViewerItem = pane.item.copy(
+                favoriteLevel = state.mediaFavoriteLevels[pane.item.uri] ?: 0,
+            )
+            val sourceItems = pane.sourceItems
+            val currentIndex = sourceItems.indexOfFirst { it.uri == pane.item.uri }
+            MediaViewer(
+                item = temporaryViewerItem,
+                hasPrevious = currentIndex > 0,
+                hasNext = currentIndex >= 0 && currentIndex < sourceItems.lastIndex,
+                onClose = onReturnToMultiMedia,
+                onNext = {
+                    sourceItems.getOrNull(currentIndex + 1)?.let { nextItem ->
+                        onUpdateMultiMedia(slot, nextItem)
+                    }
+                },
+                onPrevious = {
+                    sourceItems.getOrNull(currentIndex - 1)?.let { previousItem ->
+                        onUpdateMultiMedia(slot, previousItem)
+                    }
+                },
+                onFirst = {
+                    sourceItems.firstOrNull()?.let { firstItem ->
+                        onUpdateMultiMedia(slot, firstItem)
+                    }
+                },
+                onLast = {
+                    sourceItems.lastOrNull()?.let { lastItem ->
+                        onUpdateMultiMedia(slot, lastItem)
+                    }
+                },
+                playbackMode = state.playbackMode,
+                onTogglePlaybackMode = onTogglePlaybackMode,
+                videoSegments = state.videoSegmentsByUri[temporaryViewerItem.uri].orEmpty(),
+                onAddVideoSegment = { start, end -> onAddVideoSegment(temporaryViewerItem.uri, start, end) },
+                onDeleteVideoSegment = { segment -> onDeleteVideoSegment(temporaryViewerItem.uri, segment) },
+                onRenameVideoSegment = { segment, name ->
+                    onRenameVideoSegment(temporaryViewerItem.uri, segment, name)
+                },
+                onOpenAuthorSearch = onOpenAuthorSearch,
+                onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
+                isInDefaultFavoriteFolder = state.defaultFavoriteFolderId
+                    ?.let { temporaryViewerItem.uri in state.favoriteFolderMediaUris[it].orEmpty() } == true,
+                onToggleDefaultFavoriteFolder = {
+                    onToggleMediaInDefaultFavoriteFolder(temporaryViewerItem.uri)
+                },
+                allTags = state.tags,
+                selectedTags = state.mediaTags[temporaryViewerItem.uri].orEmpty(),
+                onToggleMediaTag = { tagName -> onToggleMediaTag(temporaryViewerItem.uri, tagName) },
+                onDeleteCurrentMedia = {},
+                onEnterMultiVideoMode = {},
+                onReturnToMultiVideo = onReturnToMultiMedia,
+                showDeleteAction = false,
+                initialPlaybackPositionMillis = pane.playbackPositionMillis,
+                initialPlayWhenReady = pane.playWhenReady,
+                initialScale = pane.scale,
+                onVideoPlaybackStateChange = { position, shouldPlay ->
+                    onUpdateTemporaryMultiMediaPlayback(slot, temporaryViewerItem.uri, position, shouldPlay)
+                },
+                onViewerScaleChange = { scale ->
+                    onUpdateTemporaryMultiMediaScale(slot, temporaryViewerItem.uri, scale)
+                },
+                onOpenToneCurve = onOpenToneCurve,
+                onToneCurveChange = onToneCurveChange,
+                onOpenColorAdjustments = onOpenColorAdjustments,
+                onColorAdjustmentsChange = onColorAdjustmentsChange,
+            )
+        }
+        multiMediaSession?.takeIf { isMultiMediaFullscreen && temporarySinglePane == null }?.let { session ->
+            MultiMediaViewer(
+                session = session,
+                videoSegmentsByUri = state.videoSegmentsByUri,
+                onPickMediaSlot = onPickMultiMediaSlotFromBrowser,
+                onSearchAuthor = onSearchMultiMediaAuthor,
+                onExpandMediaSlot = onExpandMultiMediaSlot,
+                onRemoveMediaSlot = onRemoveMultiMediaSlot,
+                onPaneItemChange = onUpdateMultiMedia,
+                onPanePlaybackStateChange = onUpdateMultiMediaPlayback,
+                onOpenTemporarySingleMedia = onOpenTemporarySingleMedia,
+                onOpenToneCurve = onOpenToneCurve,
+                onExit = onExitMultiMediaMode,
+            )
+        }
+        multiMediaSession?.takeIf { !isMultiMediaFullscreen && temporarySinglePane == null }?.let { session ->
+            FloatingMultiMediaWindow(
+                session = session,
+                onPaneItemChange = onUpdateMultiMedia,
+                onOpen = onOpenMultiMediaMode,
+                onClose = onExitMultiMediaMode,
+            )
+        }
+        if (isToneCurvePanelVisible) {
+            ToneCurvePanel(
+                toneCurve = toneCurve,
+                onToneCurveChange = onToneCurveChange,
+                onDismiss = onDismissToneCurve,
+            )
+        }
+        if (isColorAdjustmentPanelVisible) {
+            ColorAdjustmentPanel(
+                colorAdjustments = colorAdjustments,
+                onColorAdjustmentsChange = onColorAdjustmentsChange,
+                onDismiss = onDismissColorAdjustments,
             )
         }
     }
@@ -526,6 +938,7 @@ private fun BrowserScreen(
     onSelectFolder: (String) -> Unit,
     onSelectAuthor: (String) -> Unit,
     onSelectTag: (String) -> Unit,
+    onSelectFavoriteFolder: (String) -> Unit,
     onSelectBrowserMode: (BrowserMode) -> Unit,
     onCollectionSearchQueryChange: (String) -> Unit,
     onSelectCollectionSortField: (CollectionSortField) -> Unit,
@@ -537,8 +950,11 @@ private fun BrowserScreen(
     onEnsureVideoThumbnail: (MediaItem) -> Unit,
     onOpenItem: (MediaItem) -> Unit,
     onRefresh: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenTagSettings: () -> Unit,
     onOpenSync: () -> Unit,
     onOpenBackup: () -> Unit,
+    onSelectAppTheme: (AppTheme) -> Unit,
     onSyncHostChange: (String) -> Unit,
     onSyncPortChange: (String) -> Unit,
     onSyncTokenChange: (String) -> Unit,
@@ -548,6 +964,9 @@ private fun BrowserScreen(
     onDownloadAllSyncFiles: () -> Unit,
     onAddTag: (String) -> Unit,
     onDeleteTag: (String) -> Unit,
+    onCreateFavoriteFolder: () -> Unit,
+    onRenameFavoriteFolder: (String, String) -> Unit,
+    onSetDefaultFavoriteFolder: (String) -> Unit,
     onGridReturnTargetHandled: (String) -> Unit,
     selectedMediaUrisForDelete: Set<String>,
     onSelectedMediaUrisForDeleteChange: (Set<String>) -> Unit,
@@ -566,6 +985,7 @@ private fun BrowserScreen(
         BrowserMode.Folder -> onSelectFolder
         BrowserMode.Author -> onSelectAuthor
         BrowserMode.Tag -> onSelectTag
+        BrowserMode.FavoriteFolder -> onSelectFavoriteFolder
     }
 
     Row(Modifier.fillMaxSize()) {
@@ -575,6 +995,8 @@ private fun BrowserScreen(
             browserMode = state.browserMode,
             hasAuthors = state.authors.isNotEmpty(),
             hasTags = state.tags.isNotEmpty(),
+            favoriteFolders = state.favoriteFolders,
+            defaultFavoriteFolderId = state.defaultFavoriteFolderId,
             isRefreshing = state.isRefreshing,
             onRefresh = onRefresh,
             onSelectBrowserMode = onSelectBrowserMode,
@@ -585,16 +1007,18 @@ private fun BrowserScreen(
             onSelectCollectionSortField = onSelectCollectionSortField,
             onToggleCollectionSortDirection = onToggleCollectionSortDirection,
             onSetAuthorFavoriteLevel = onSetAuthorFavoriteLevel,
+            onCreateFavoriteFolder = onCreateFavoriteFolder,
+            onRenameFavoriteFolder = onRenameFavoriteFolder,
+            onSetDefaultFavoriteFolder = onSetDefaultFavoriteFolder,
             onSelectCollection = onSelectCollection,
-            onOpenBackup = onOpenBackup,
-            onOpenSync = onOpenSync,
+            onOpenSettings = onOpenSettings,
             modifier = Modifier.width(214.dp).fillMaxHeight(),
         )
         Box(
             Modifier
                 .width(1.dp)
                 .fillMaxHeight()
-                .background(Color(0xFF2B2238)),
+                .background(MaterialTheme.colorScheme.surfaceVariant),
         )
         Crossfade(
             targetState = state.rightPaneMode to selectedCollectionId,
@@ -603,6 +1027,20 @@ private fun BrowserScreen(
             label = "media_collection_switch",
         ) { (rightPaneMode, collectionId) ->
             when (rightPaneMode) {
+                RightPaneMode.Settings -> SettingsScreen(
+                    selectedTheme = state.appTheme,
+                    onSelectTheme = onSelectAppTheme,
+                    onOpenBackup = onOpenBackup,
+                    onOpenTagSettings = onOpenTagSettings,
+                    onOpenSync = onOpenSync,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                RightPaneMode.Tags -> TagSettingsScreen(
+                    tags = state.tags,
+                    onAddTag = onAddTag,
+                    onDeleteTag = onDeleteTag,
+                    modifier = Modifier.fillMaxSize(),
+                )
                 RightPaneMode.Sync -> SyncScreen(
                     host = state.syncHost,
                     port = state.syncPort,
@@ -622,9 +1060,6 @@ private fun BrowserScreen(
                     modifier = Modifier.fillMaxSize(),
                 )
                 RightPaneMode.Backup -> BackupScreen(
-                    tags = state.tags,
-                    onAddTag = onAddTag,
-                    onDeleteTag = onDeleteTag,
                     onExportBackup = onExportBackup,
                     onImportBackup = onImportBackup,
                     modifier = Modifier.fillMaxSize(),
@@ -637,18 +1072,27 @@ private fun BrowserScreen(
                             MediaSortToolbar(
                                 sortField = state.mediaSortField,
                                 sortDirection = state.mediaSortDirection,
+                                isRecentPlayback = selectedCollection?.id == "recent-playback",
                                 onSelectSortField = onSelectMediaSortField,
                                 onToggleSortDirection = onToggleMediaSortDirection,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             if (selectedMediaUrisForDelete.isNotEmpty()) {
-                                DeleteSelectedButton(
-                                    count = selectedMediaUrisForDelete.size,
-                                    onClick = { onDeleteMediaUris(selectedMediaUrisForDelete) },
+                                Row(
                                     modifier = Modifier
                                         .align(Alignment.CenterEnd)
                                         .padding(end = 10.dp),
-                                )
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    CancelSelectionButton(
+                                        onClick = { onSelectedMediaUrisForDeleteChange(emptySet()) },
+                                    )
+                                    DeleteSelectedButton(
+                                        count = selectedMediaUrisForDelete.size,
+                                        onClick = { onDeleteMediaUris(selectedMediaUrisForDelete) },
+                                    )
+                                }
                             }
                         }
                         MediaGrid(
@@ -674,37 +1118,29 @@ private fun BrowserScreen(
 private fun MediaSortToolbar(
     sortField: MediaSortField,
     sortDirection: SortDirection,
+    isRecentPlayback: Boolean,
     onSelectSortField: (MediaSortField) -> Unit,
     onToggleSortDirection: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
         modifier = modifier
-            .height(48.dp)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .height(56.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        SortChip(
-            text = "名称",
-            selected = sortField == MediaSortField.Name,
-            onClick = { onSelectSortField(MediaSortField.Name) },
+        Text("媒体", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.weight(1f))
+        CompactDropdown(
+            label = "排序 · ${sortField.label(isRecentPlayback)}",
+            options = listOf(
+                "名称" to { onSelectSortField(MediaSortField.Name) },
+                (if (isRecentPlayback) "播放时间" else "时间") to { onSelectSortField(MediaSortField.ModifiedTime) },
+                "爱心" to { onSelectSortField(MediaSortField.FavoriteLevel) },
+            ),
         )
-        SortChip(
-            text = "最新",
-            selected = sortField == MediaSortField.ModifiedTime,
-            onClick = { onSelectSortField(MediaSortField.ModifiedTime) },
-        )
-        SortChip(
-            text = "爱心",
-            selected = sortField == MediaSortField.FavoriteLevel,
-            onClick = { onSelectSortField(MediaSortField.FavoriteLevel) },
-        )
-        SortChip(
-            text = sortDirection.label(),
-            selected = true,
-            onClick = onToggleSortDirection,
-        )
+        SortDirectionButton(sortDirection = sortDirection, onClick = onToggleSortDirection)
     }
 }
 
@@ -729,6 +1165,26 @@ private fun DeleteSelectedButton(
 }
 
 @Composable
+private fun CancelSelectionButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        "全部取消",
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF34445F))
+            .border(1.dp, Color(0x55FFFFFF), RoundedCornerShape(8.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        color = Color.White,
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+    )
+}
+
+@Composable
 private fun CollectionSortToolbar(
     browserMode: BrowserMode,
     sortField: CollectionSortField,
@@ -737,46 +1193,55 @@ private fun CollectionSortToolbar(
     onToggleSortDirection: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier
-            .height(48.dp)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        SortChip(
-            text = "名称",
-            selected = sortField == CollectionSortField.Name,
-            onClick = { onSelectSortField(CollectionSortField.Name) },
-            compact = true,
+    Row(modifier = modifier.padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        CompactDropdown(
+            label = "排序 · ${sortField.label()}",
+            options = buildList {
+                add("名称" to { onSelectSortField(CollectionSortField.Name) })
+                add("数量" to { onSelectSortField(CollectionSortField.Count) })
+                add("时间" to { onSelectSortField(CollectionSortField.ModifiedTime) })
+                if (browserMode == BrowserMode.Author) add("爱心" to { onSelectSortField(CollectionSortField.FavoriteLevel) })
+            },
         )
-        SortChip(
-            text = "数量",
-            selected = sortField == CollectionSortField.Count,
-            onClick = { onSelectSortField(CollectionSortField.Count) },
-            compact = true,
-        )
-        SortChip(
-            text = "最新",
-            selected = sortField == CollectionSortField.ModifiedTime,
-            onClick = { onSelectSortField(CollectionSortField.ModifiedTime) },
-            compact = true,
-        )
-        if (browserMode == BrowserMode.Author) {
-            SortChip(
-                text = "爱心",
-                selected = sortField == CollectionSortField.FavoriteLevel,
-                onClick = { onSelectSortField(CollectionSortField.FavoriteLevel) },
-                compact = true,
-            )
-        }
-        SortChip(
-            text = sortDirection.label(),
-            selected = true,
+        SortDirectionButton(
+            sortDirection = sortDirection,
             onClick = onToggleSortDirection,
             compact = true,
         )
     }
+}
+
+@Composable
+private fun CompactDropdown(label: String, options: List<Pair<String, () -> Unit>>, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        Text(
+            "$label ▾",
+            modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant)
+                .clickable { expanded = true }.padding(horizontal = 9.dp, vertical = 7.dp),
+            color = MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (name, action) ->
+                DropdownMenuItem(text = { Text(name) }, onClick = { action(); expanded = false })
+            }
+        }
+    }
+}
+
+private fun MediaSortField.label(isRecentPlayback: Boolean = false) = when (this) {
+    MediaSortField.Name -> "名称"
+    MediaSortField.ModifiedTime -> if (isRecentPlayback) "播放时间" else "时间"
+    MediaSortField.FavoriteLevel -> "爱心"
+}
+
+private fun CollectionSortField.label() = when (this) {
+    CollectionSortField.Name -> "名称"
+    CollectionSortField.Count -> "数量"
+    CollectionSortField.ModifiedTime -> "时间"
+    CollectionSortField.FavoriteLevel -> "爱心"
 }
 
 @Composable
@@ -787,7 +1252,7 @@ private fun SortChip(
     compact: Boolean = false,
 ) {
     val background by animateColorAsState(
-        targetValue = if (selected) Color(0xFFFF8A00) else Color(0xFF241D31),
+        targetValue = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
         animationSpec = tween(ViewerUiSpec.SELECTION_TRANSITION_DURATION_MILLIS),
         label = "sort_chip_background",
     )
@@ -798,17 +1263,34 @@ private fun SortChip(
             .background(background)
             .clickable { onClick() }
             .padding(horizontal = if (compact) 5.dp else 8.dp, vertical = 6.dp),
-        color = if (selected) Color(0xFF1A0D00) else Color.White,
+        color = if (selected) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onSurface,
         style = MaterialTheme.typography.bodySmall,
         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
         maxLines = 1,
     )
 }
 
-private fun SortDirection.label(): String {
-    return when (this) {
-        SortDirection.Ascending -> "正序"
-        SortDirection.Descending -> "倒序"
+@Composable
+private fun SortDirectionButton(
+    sortDirection: SortDirection,
+    onClick: () -> Unit,
+    compact: Boolean = false,
+) {
+    val isAscending = sortDirection == SortDirection.Ascending
+    Box(
+        modifier = Modifier
+            .size(if (compact) 32.dp else 36.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = if (isAscending) Icons.Rounded.ArrowUpward else Icons.Rounded.ArrowDownward,
+            contentDescription = if (isAscending) "升序" else "降序",
+            modifier = Modifier.size(if (compact) 18.dp else 20.dp),
+            tint = MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 
@@ -819,6 +1301,8 @@ private fun FolderRail(
     browserMode: BrowserMode,
     hasAuthors: Boolean,
     hasTags: Boolean,
+    favoriteFolders: List<FavoriteFolder>,
+    defaultFavoriteFolderId: String?,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
     onSelectBrowserMode: (BrowserMode) -> Unit,
@@ -829,15 +1313,18 @@ private fun FolderRail(
     onSelectCollectionSortField: (CollectionSortField) -> Unit,
     onToggleCollectionSortDirection: () -> Unit,
     onSetAuthorFavoriteLevel: (String, Int) -> Unit,
+    onCreateFavoriteFolder: () -> Unit,
+    onRenameFavoriteFolder: (String, String) -> Unit,
+    onSetDefaultFavoriteFolder: (String) -> Unit,
     onSelectCollection: (String) -> Unit,
-    onOpenBackup: () -> Unit,
-    onOpenSync: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.background(Color(0xFF15111F))) {
-        FavoritesBackupToolbar(
-            onOpenBackup = onOpenBackup,
-            onOpenSync = onOpenSync,
+    Column(modifier = modifier.background(MaterialTheme.colorScheme.surface)) {
+        AppRailHeader(
+            isRefreshing = isRefreshing,
+            onRefresh = onRefresh,
+            onOpenSettings = onOpenSettings,
             modifier = Modifier.fillMaxWidth(),
         )
         RailDivider()
@@ -845,15 +1332,9 @@ private fun FolderRail(
             browserMode = browserMode,
             hasAuthors = hasAuthors,
             hasTags = hasTags,
-            isRefreshing = isRefreshing,
-            onRefresh = onRefresh,
             onSelectBrowserMode = onSelectBrowserMode,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        RailDivider()
-        CollectionSearchField(
-            query = searchQuery,
-            onQueryChange = onSearchQueryChange,
+            searchQuery = searchQuery,
+            onSearchQueryChange = onSearchQueryChange,
             modifier = Modifier.fillMaxWidth(),
         )
         RailDivider()
@@ -866,6 +1347,10 @@ private fun FolderRail(
             modifier = Modifier.fillMaxWidth(),
         )
         RailDivider()
+        if (browserMode == BrowserMode.FavoriteFolder) {
+            FavoriteFolderListHeader(onCreateFavoriteFolder = onCreateFavoriteFolder)
+            RailDivider()
+        }
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 10.dp, end = 10.dp, bottom = 10.dp),
@@ -874,7 +1359,7 @@ private fun FolderRail(
             items(collections, key = { it.id }) { collection ->
                 val selected = collection.id in selectedCollectionIds
                 val rowBackground by animateColorAsState(
-                    targetValue = if (selected) Color(0xFF2D2540) else Color.Transparent,
+                    targetValue = if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
                     animationSpec = tween(ViewerUiSpec.SELECTION_TRANSITION_DURATION_MILLIS),
                     label = "folder_selection_background",
                 )
@@ -893,7 +1378,7 @@ private fun FolderRail(
                         modifier = Modifier
                             .size(48.dp)
                             .clip(RoundedCornerShape(6.dp))
-                            .background(Color(0xFF241D31)),
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
                         contentScale = ContentScale.Crop,
                     )
                     Spacer(Modifier.width(10.dp))
@@ -922,6 +1407,18 @@ private fun FolderRail(
                                     },
                                 )
                             }
+                            if (browserMode == BrowserMode.FavoriteFolder) {
+                                val folderId = collection.id.removePrefix("favorite-folder:")
+                                Spacer(Modifier.weight(1f))
+                                if (favoriteFolders.any { it.id == folderId }) {
+                                    FavoriteFolderRowActions(
+                                        folderName = collection.name,
+                                        isDefault = folderId == defaultFavoriteFolderId,
+                                        onSetDefault = { onSetDefaultFavoriteFolder(folderId) },
+                                        onRename = { name -> onRenameFavoriteFolder(folderId, name) },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -931,30 +1428,142 @@ private fun FolderRail(
 }
 
 @Composable
+private fun FavoriteFolderListHeader(onCreateFavoriteFolder: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "收藏夹",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.weight(1f))
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .clickable { onCreateFavoriteFolder() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Add,
+                contentDescription = "新建收藏夹",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FavoriteFolderRowActions(
+    folderName: String,
+    isDefault: Boolean,
+    onSetDefault: () -> Unit,
+    onRename: (String) -> Unit,
+) {
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var draftName by remember(folderName) { mutableStateOf(folderName) }
+    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .clickable { if (!isDefault) onSetDefault() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = if (isDefault) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+                contentDescription = if (isDefault) "默认收藏夹" else "设为默认收藏夹",
+                modifier = Modifier.size(18.dp),
+                tint = if (isDefault) Color(0xFFFFC107) else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .clickable { showRenameDialog = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Edit,
+                contentDescription = "重命名收藏夹",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (showRenameDialog) {
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            title = { Text("重命名收藏夹") },
+            text = {
+                TextField(
+                    value = draftName,
+                    onValueChange = { draftName = it },
+                    singleLine = true,
+                    label = { Text("收藏夹名称") },
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    onRename(draftName)
+                    showRenameDialog = false
+                }) { Text("保存") }
+            },
+            dismissButton = {
+                Text(
+                    "取消",
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { showRenameDialog = false }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+        )
+    }
+}
+
+@Composable
 private fun CollectionSearchField(
     query: String,
     onQueryChange: (String) -> Unit,
+    compact: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
+    val fieldHeight = if (compact) 34.dp else 48.dp
+    val fieldShape = RoundedCornerShape(if (compact) 8.dp else 4.dp)
     BasicTextField(
         value = query,
         onValueChange = onQueryChange,
-        modifier = modifier,
+        modifier = modifier.height(fieldHeight),
         singleLine = true,
-        textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
+        textStyle = (if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge)
+            .copy(color = MaterialTheme.colorScheme.onSurface),
         decorationBox = { innerTextField ->
             Row(
                 modifier = Modifier
-                    .height(48.dp)
-                    .padding(horizontal = 10.dp, vertical = 5.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(Color(0xFF352B42))
+                    .fillMaxSize()
+                    .padding(
+                        horizontal = if (compact) 0.dp else 10.dp,
+                        vertical = if (compact) 0.dp else 5.dp,
+                    )
+                    .clip(fieldShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
                     .border(
                         width = 1.dp,
-                        color = Color(0x663DDC84),
-                        shape = RoundedCornerShape(4.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                        shape = fieldShape,
                     )
-                    .padding(start = 12.dp, end = 6.dp),
+                    .padding(start = if (compact) 10.dp else 12.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
@@ -965,7 +1574,7 @@ private fun CollectionSearchField(
                         Text(
                             "搜索",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodyLarge,
+                            style = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
                         )
                     }
                     innerTextField()
@@ -977,7 +1586,7 @@ private fun CollectionSearchField(
                             .clip(RoundedCornerShape(999.dp))
                             .clickable { onQueryChange("") }
                             .padding(horizontal = 8.dp, vertical = 2.dp),
-                        color = Color(0xFFE8EAED),
+                        color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -993,34 +1602,67 @@ private fun RailDivider() {
         Modifier
             .fillMaxWidth()
             .height(1.dp)
-            .background(Color(0xFF2B2238)),
+            .background(MaterialTheme.colorScheme.surfaceVariant),
     )
 }
 
 @Composable
-private fun FavoritesBackupToolbar(
-    onOpenBackup: () -> Unit,
-    onOpenSync: () -> Unit,
+private fun AppRailHeader(
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
         modifier = modifier
-            .height(48.dp)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .height(58.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        SortChip(
-            text = "数据备份",
-            selected = false,
-            onClick = onOpenBackup,
-            compact = true,
+        Text("VideoSee", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.width(4.dp))
+        RailIconButton(
+            icon = Icons.Rounded.Refresh,
+            contentDescription = "刷新",
+            enabled = !isRefreshing,
+            onClick = onRefresh,
         )
-        SortChip(
-            text = "下载",
-            selected = false,
-            onClick = onOpenSync,
-            compact = true,
+        Spacer(Modifier.weight(1f))
+        RailIconButton(
+            icon = Icons.Rounded.Settings,
+            contentDescription = "设置",
+            onClick = onOpenSettings,
+        )
+    }
+}
+
+@Composable
+private fun RailIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val iconColor = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+    val backgroundColor = if (enabled) {
+        MaterialTheme.colorScheme.surfaceVariant
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    }
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(backgroundColor)
+            .clickable(enabled = enabled) { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(22.dp),
+            tint = iconColor,
         )
     }
 }
@@ -1137,6 +1779,85 @@ private fun ViewerFavoritePicker(
 }
 
 @Composable
+private fun DefaultFavoriteFolderButton(
+    isFavorite: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .size(46.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.Transparent)
+            .border(1.dp, Color(0x99E9C55D), RoundedCornerShape(16.dp))
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        RoundedStarIcon(
+            selected = isFavorite,
+            modifier = Modifier.size(34.dp),
+        )
+    }
+}
+
+@Composable
+private fun RoundedStarIcon(
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(
+        modifier = modifier.graphicsLayer {
+            compositingStrategy = CompositingStrategy.Offscreen
+        },
+    ) {
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val outerRadius = size.minDimension * 0.46f
+        val innerRadius = outerRadius * 0.48f
+        val vertices = List(10) { index ->
+            val angle = Math.toRadians((-90.0 + index * 36.0))
+            val radius = if (index % 2 == 0) outerRadius else innerRadius
+            Offset(
+                x = center.x + (kotlin.math.cos(angle) * radius).toFloat(),
+                y = center.y + (kotlin.math.sin(angle) * radius).toFloat(),
+            )
+        }
+        val cornerFraction = 0.18f
+        fun between(start: Offset, end: Offset, fraction: Float): Offset = Offset(
+            x = start.x + (end.x - start.x) * fraction,
+            y = start.y + (end.y - start.y) * fraction,
+        )
+        val path = Path().apply {
+            val firstPrevious = vertices.last()
+            val first = vertices.first()
+            moveTo(
+                between(firstPrevious, first, 1f - cornerFraction).x,
+                between(firstPrevious, first, 1f - cornerFraction).y,
+            )
+            vertices.indices.forEach { index ->
+                val previous = vertices[(index + vertices.lastIndex) % vertices.size]
+                val current = vertices[index]
+                val next = vertices[(index + 1) % vertices.size]
+                val before = between(previous, current, 1f - cornerFraction)
+                val after = between(current, next, cornerFraction)
+                lineTo(before.x, before.y)
+                quadraticTo(current.x, current.y, after.x, after.y)
+            }
+            close()
+        }
+        if (selected) {
+            drawPath(path, color = Color(0xFFE9C55D), style = Fill)
+        } else {
+            drawPath(path, color = Color.Transparent, style = Fill, blendMode = BlendMode.Clear)
+            drawPath(
+                path,
+                color = Color.White,
+                style = Stroke(width = 2.2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+            )
+        }
+    }
+}
+
+@Composable
 private fun ViewerDeleteButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1183,7 +1904,7 @@ private fun ViewerTagRail(
                     )
                     .clickable { onToggleTag(tagName) }
                     .padding(horizontal = 8.dp, vertical = 10.dp),
-                color = if (selected) Color(0xFF06120B) else Color.White,
+                color = if (selected) MaterialTheme.colorScheme.background else MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -1198,59 +1919,41 @@ private fun FolderToolbar(
     browserMode: BrowserMode,
     hasAuthors: Boolean,
     hasTags: Boolean,
-    isRefreshing: Boolean,
-    onRefresh: () -> Unit,
     onSelectBrowserMode: (BrowserMode) -> Unit,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
         modifier = modifier
-            .height(56.dp)
+            .height(52.dp)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        BrowserModeButton(
-            text = "文件夹",
-            selected = browserMode == BrowserMode.Folder,
-            enabled = true,
-            onClick = { onSelectBrowserMode(BrowserMode.Folder) },
+        CompactDropdown(
+            label = browserMode.label(),
+            options = buildList {
+                add("文件夹" to { onSelectBrowserMode(BrowserMode.Folder) })
+                if (hasAuthors) add("作者" to { onSelectBrowserMode(BrowserMode.Author) })
+                if (hasTags) add("标签" to { onSelectBrowserMode(BrowserMode.Tag) })
+                add("收藏夹" to { onSelectBrowserMode(BrowserMode.FavoriteFolder) })
+            },
         )
-        BrowserModeButton(
-            text = "作者",
-            selected = browserMode == BrowserMode.Author,
-            enabled = hasAuthors,
-            onClick = { onSelectBrowserMode(BrowserMode.Author) },
+        CollectionSearchField(
+            query = searchQuery,
+            onQueryChange = onSearchQueryChange,
+            compact = true,
+            modifier = Modifier.weight(1f),
         )
-        BrowserModeButton(
-            text = "标签",
-            selected = browserMode == BrowserMode.Tag,
-            enabled = hasTags,
-            onClick = { onSelectBrowserMode(BrowserMode.Tag) },
-        )
-        Text(
-            if (isRefreshing) "刷新" else "刷新",
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF241D31))
-                .clickable(enabled = !isRefreshing) { onRefresh() }
-                .padding(horizontal = 9.dp, vertical = 7.dp),
-            color = if (isRefreshing) MaterialTheme.colorScheme.onSurfaceVariant else Color.White,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        AnimatedVisibility(
-            visible = isRefreshing,
-            enter = fadeIn(animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS)),
-            exit = fadeOut(animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS)),
-        ) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(16.dp),
-                strokeWidth = 2.dp,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
     }
+}
+
+private fun BrowserMode.label() = when (this) {
+    BrowserMode.Folder -> "文件夹"
+    BrowserMode.Author -> "作者"
+    BrowserMode.Tag -> "标签"
+    BrowserMode.FavoriteFolder -> "收藏夹"
 }
 
 @Composable
@@ -1261,7 +1964,7 @@ private fun BrowserModeButton(
     onClick: () -> Unit,
 ) {
     val background by animateColorAsState(
-        targetValue = if (selected) MaterialTheme.colorScheme.primary else Color(0xFF241D31),
+        targetValue = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
         animationSpec = tween(ViewerUiSpec.SELECTION_TRANSITION_DURATION_MILLIS),
         label = "browser_mode_background",
     )
@@ -1274,8 +1977,8 @@ private fun BrowserModeButton(
             .padding(horizontal = 8.dp, vertical = 7.dp),
         color = when {
             !enabled -> MaterialTheme.colorScheme.onSurfaceVariant
-            selected -> Color(0xFF06120B)
-            else -> Color.White
+            selected -> MaterialTheme.colorScheme.background
+            else -> MaterialTheme.colorScheme.onSurface
         },
         style = MaterialTheme.typography.bodySmall,
         fontWeight = FontWeight.SemiBold,
@@ -1283,55 +1986,169 @@ private fun BrowserModeButton(
 }
 
 @Composable
+private fun SettingsScreen(
+    selectedTheme: AppTheme,
+    onSelectTheme: (AppTheme) -> Unit,
+    onOpenBackup: () -> Unit,
+    onOpenTagSettings: () -> Unit,
+    onOpenSync: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(
+        modifier = modifier.background(MaterialTheme.colorScheme.background),
+        contentPadding = PaddingValues(24.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        item {
+            Column {
+                Text("设置", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            }
+        }
+        item {
+            SettingsSection("外观") {
+                Text("主题色", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AppTheme.entries.take(3).forEach { theme -> ThemeTile(theme, selectedTheme == theme) { onSelectTheme(theme) } }
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AppTheme.entries.drop(3).forEach { theme -> ThemeTile(theme, selectedTheme == theme) { onSelectTheme(theme) } }
+                }
+            }
+        }
+        item {
+            SettingsSection("数据与同步") {
+                SettingsAction("数据备份", "导入或导出爱心、标签、收藏夹和精彩片段", onOpenBackup)
+                Spacer(Modifier.height(8.dp))
+                SettingsAction("标签设置", "新建、整理或删除标签", onOpenTagSettings)
+                Spacer(Modifier.height(8.dp))
+                SettingsAction("下载", "连接手机同步服务并下载文件", onOpenSync)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsSection(title: String, content: @Composable () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surface).padding(16.dp),
+    ) {
+        Text(title, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(14.dp))
+        content()
+    }
+}
+
+@Composable
+private fun ThemeTile(theme: AppTheme, selected: Boolean, onClick: () -> Unit) {
+    val color = when (theme) {
+        AppTheme.Midnight -> Color(0xFF172033); AppTheme.Graphite -> Color(0xFF303030); AppTheme.Forest -> Color(0xFF203A30)
+        AppTheme.Snow -> Color(0xFFF1F5F9); AppTheme.Mist -> Color(0xFFF0EBFA); AppTheme.Sand -> Color(0xFFF7EEDF)
+    }
+    Column(
+        modifier = Modifier.width(88.dp).clip(RoundedCornerShape(12.dp)).background(color)
+            .border(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, RoundedCornerShape(12.dp))
+            .clickable { onClick() }.padding(10.dp),
+    ) {
+        Text(if (theme.isDark) "深色" else "浅色", color = if (theme.isDark) Color.White else Color(0xFF302015), style = MaterialTheme.typography.labelSmall)
+        Spacer(Modifier.height(4.dp))
+        Text(theme.label, color = if (theme.isDark) Color.White else Color(0xFF302015), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun SettingsAction(title: String, description: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable { onClick() }.padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        }
+        Text("›", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
 private fun BackupScreen(
-    tags: List<String>,
-    onAddTag: (String) -> Unit,
-    onDeleteTag: (String) -> Unit,
     onExportBackup: (String) -> Unit,
     onImportBackup: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var newTagName by remember { mutableStateOf("") }
     Column(
         modifier = modifier
-            .background(Color(0xFF120F1A))
+            .background(MaterialTheme.colorScheme.background)
             .padding(14.dp),
     ) {
         Text("数据备份", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SortChip("导出爱心和标签数据", selected = true, onClick = { onExportBackup("all") })
-            SortChip("导入爱心和标签数据", selected = false, onClick = { onImportBackup("all") })
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            BackupActionRow(
+                title = "导出备份",
+                description = "导出爱心、标签、收藏夹和精彩片段",
+                onClick = { onExportBackup("all") },
+            )
+            BackupActionRow(
+                title = "导入备份",
+                description = "导入爱心、标签、收藏夹和精彩片段",
+                onClick = { onImportBackup("all") },
+            )
         }
-        Spacer(Modifier.height(18.dp))
+    }
+}
+
+@Composable
+private fun BackupActionRow(
+    title: String,
+    description: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(
+                description,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+@Composable
+private fun TagSettingsScreen(
+    tags: List<String>,
+    onAddTag: (String) -> Unit,
+    onDeleteTag: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var newTagName by remember { mutableStateOf("") }
+    Column(modifier = modifier.background(MaterialTheme.colorScheme.background).padding(14.dp)) {
         Text("标签设置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextField(
-                value = newTagName,
-                onValueChange = { newTagName = it },
-                label = { Text("新标签") },
-                singleLine = true,
-                modifier = Modifier.width(220.dp),
-            )
-            SortChip(
-                text = "添加",
-                selected = true,
-                onClick = {
-                    onAddTag(newTagName)
-                    newTagName = ""
-                },
-            )
+            TextField(value = newTagName, onValueChange = { newTagName = it }, label = { Text("新标签") }, singleLine = true, modifier = Modifier.width(220.dp))
+            SortChip("添加", selected = true, onClick = { onAddTag(newTagName); newTagName = "" })
         }
         Spacer(Modifier.height(12.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(tags, key = { it }) { tagName ->
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF241D31))
-                        .padding(10.dp),
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(tagName, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
@@ -1363,7 +2180,7 @@ private fun SyncScreen(
 ) {
     Column(
         modifier = modifier
-            .background(Color(0xFF120F1A))
+            .background(MaterialTheme.colorScheme.background)
             .padding(14.dp),
     ) {
         Row(
@@ -1456,7 +2273,7 @@ private fun SyncFileRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFF241D31))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1523,7 +2340,7 @@ private fun MediaGrid(
         val visibleRowCount = remember(maxHeight, cellSize) {
             ((maxHeight + 8.dp) / (cellSize + 8.dp)).toInt().coerceAtLeast(1)
         }
-        val centeredScrollIndex = remember(returnTargetIndex, columnCount, visibleRowCount) {
+    val centeredScrollIndex = remember(returnTargetIndex, columnCount, visibleRowCount) {
             returnTargetIndex?.let {
                 GridReturnFocus.centeredScrollIndex(
                     targetIndex = it,
@@ -1531,8 +2348,38 @@ private fun MediaGrid(
                     visibleRowCount = visibleRowCount,
                 )
             }
+    }
+    LaunchedEffect(gridState, items, columnCount) {
+        var previousFirstVisibleIndex = -1
+        snapshotFlow {
+            val visibleItems = gridState.layoutInfo.visibleItemsInfo
+            if (visibleItems.isEmpty()) {
+                null
+            } else {
+                visibleItems.minOf { it.index } to visibleItems.maxOf { it.index }
+            }
+        }.collectLatest { visibleRange ->
+            val (firstVisibleIndex, lastVisibleIndex) = visibleRange ?: return@collectLatest
+            // Wait for a fling to settle. Visible cells keep their own higher-priority requests.
+            delay(360)
+            val prefetchCount = columnCount * 2
+            val movingForward = previousFirstVisibleIndex < 0 || firstVisibleIndex >= previousFirstVisibleIndex
+            val prefetchRange = if (movingForward) {
+                (lastVisibleIndex + 1).coerceAtMost(items.size)..(lastVisibleIndex + prefetchCount).coerceAtMost(items.lastIndex)
+            } else {
+                (firstVisibleIndex - prefetchCount).coerceAtLeast(0)..(firstVisibleIndex - 1).coerceAtLeast(0)
+            }
+            if (!prefetchRange.isEmpty()) {
+                prefetchRange.forEach { index ->
+                    items[index]
+                        .takeIf { it.mediaType == MediaType.Video }
+                        ?.let(onEnsureVideoThumbnail)
+                }
+            }
+            previousFirstVisibleIndex = firstVisibleIndex
         }
-        LaunchedEffect(returnTargetUri, returnTargetIndex, centeredScrollIndex) {
+    }
+    LaunchedEffect(returnTargetUri, returnTargetIndex, centeredScrollIndex) {
             val targetUri = returnTargetUri ?: return@LaunchedEffect
             centeredScrollIndex ?: return@LaunchedEffect
             gridState.animateScrollToItem(centeredScrollIndex)
@@ -1580,7 +2427,7 @@ private fun MediaGrid(
                         }
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF241D31))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
                         .combinedClickable(
                             onClick = {
                                 if (deleteSelectionMode) {
@@ -1606,27 +2453,37 @@ private fun MediaGrid(
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
                     )
-                    if (item.mediaType == MediaType.Video) {
-                        Text(
-                            text = "▶ ${item.durationMillis.formatDuration()}",
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .background(Color(0x99000000))
-                                .padding(horizontal = 6.dp, vertical = 3.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    Box(
+                    Row(
                         modifier = Modifier
-                            .align(Alignment.BottomEnd)
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(30.dp)
                             .background(Color(0x99000000))
-                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                            .padding(horizontal = 5.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        if (item.mediaType == MediaType.Video) {
+                            Text(
+                                text = "▶ ${item.durationMillis.formatDuration()}",
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .widthIn(min = 50.dp),
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Clip,
+                            )
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                        }
                         AuthorFavoritePicker(
                             favoriteLevel = item.favoriteLevel,
                             onFavoriteLevelChange = { level ->
                                 onSetMediaFavoriteLevel(item.uri, level)
                             },
+                            heartSize = 18.dp,
+                            touchTargetSize = 20.dp,
+                            spacing = 1.dp,
                         )
                     }
                     if (deleteSelectionMode) {
@@ -1803,49 +2660,54 @@ private fun MediaViewer(
     onPrevious: () -> Unit,
     onFirst: () -> Unit,
     onLast: () -> Unit,
+    playbackMode: PlaybackMode,
+    onTogglePlaybackMode: () -> Unit,
+    videoSegments: List<VideoSegment>,
+    onAddVideoSegment: (Long, Long) -> Unit,
+    onDeleteVideoSegment: (VideoSegment) -> Unit,
+    onRenameVideoSegment: (VideoSegment, String) -> Unit,
+    onOpenAuthorSearch: (String) -> Unit,
     onSetMediaFavoriteLevel: (String, Int) -> Unit,
+    isInDefaultFavoriteFolder: Boolean,
+    onToggleDefaultFavoriteFolder: () -> Unit,
     allTags: List<String>,
     selectedTags: Set<String>,
     onToggleMediaTag: (String) -> Unit,
     onDeleteCurrentMedia: () -> Unit,
+    onEnterMultiVideoMode: () -> Unit,
+    onOpenToneCurve: () -> Unit,
+    onToneCurveChange: (ToneCurve) -> Unit,
+    onOpenColorAdjustments: () -> Unit,
+    onColorAdjustmentsChange: (ColorAdjustments) -> Unit,
+    showDeleteAction: Boolean = true,
+    onReturnToMultiVideo: (() -> Unit)? = null,
+    initialPlaybackPositionMillis: Long = 0L,
+    initialPlayWhenReady: Boolean = true,
+    initialScale: Float = 1f,
+    onVideoPlaybackStateChange: ((Long, Boolean) -> Unit)? = null,
+    onViewerScaleChange: ((Float) -> Unit)? = null,
 ) {
-    var scale by remember(item.uri) { mutableFloatStateOf(1f) }
-    var offsetX by remember(item.uri) { mutableFloatStateOf(0f) }
-    var offsetY by remember(item.uri) { mutableFloatStateOf(0f) }
-    var swipeOffsetY by remember(item.uri) { mutableFloatStateOf(0f) }
-    val settleOffsetY = remember(item.uri) { Animatable(0f) }
-    var settleRequest by remember(item.uri) { mutableStateOf<SwipeSettleRequest?>(null) }
-    var settleSerial by remember(item.uri) { mutableStateOf(0) }
+    BackHandler(onBack = onReturnToMultiVideo ?: onClose)
+    var scale by remember { mutableFloatStateOf(initialScale) }
+    var hasInitializedViewerItem by remember { mutableStateOf(false) }
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
     var armedBoundaryIntent by remember { mutableStateOf<SwipeIntent?>(null) }
     var boundaryFeedbackText by remember { mutableStateOf<String?>(null) }
-    var viewportHeight by remember { mutableFloatStateOf(0f) }
-    val visibleSwipeOffsetY = settleRequest?.let { settleOffsetY.value } ?: swipeOffsetY
 
-    BackHandler(onBack = onClose)
-
-    LaunchedEffect(settleRequest?.serial) {
-        val request = settleRequest ?: return@LaunchedEffect
-        settleOffsetY.snapTo(request.startOffsetY)
-        settleOffsetY.animateTo(
-            targetValue = request.targetOffsetY,
-            animationSpec = tween(
-                durationMillis = if (request.intent == null) {
-                    SwipeTransitionSpec.CANCEL_DURATION_MILLIS
-                } else {
-                    SwipeTransitionSpec.SETTLE_DURATION_MILLIS
-                },
-                easing = FastOutSlowInEasing,
-            ),
-        )
-        when (request.intent) {
-            SwipeIntent.Next -> if (request.wrapAround) onFirst() else onNext()
-            SwipeIntent.Previous -> if (request.wrapAround) onLast() else onPrevious()
-            null -> {
-                settleRequest = null
-                swipeOffsetY = 0f
-                settleOffsetY.snapTo(0f)
-            }
+    LaunchedEffect(item.uri) {
+        if (!hasInitializedViewerItem) {
+            scale = initialScale
+            hasInitializedViewerItem = true
+        } else if (scale >= 1f) {
+            scale = 1f
         }
+        offsetX = 0f
+        offsetY = 0f
+    }
+
+    LaunchedEffect(scale) {
+        onViewerScaleChange?.invoke(scale)
     }
 
     LaunchedEffect(boundaryFeedbackText) {
@@ -1859,8 +2721,7 @@ private fun MediaViewer(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .onSizeChanged { viewportHeight = it.height.toFloat() }
-            .pointerInput(item.uri, hasPrevious, hasNext, viewportHeight) {
+            .pointerInput(item.uri, hasPrevious, hasNext) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
                     var totalSwipe = 0f
@@ -1872,15 +2733,11 @@ private fun MediaViewer(
                         val pressedPointers = event.changes.count { it.pressed }
                         if (pressedPointers >= 2) {
                             usedMultiTouch = true
-                            if (settleRequest != null) {
-                                settleRequest = null
-                            }
-                            swipeOffsetY = 0f
                             val zoom = event.calculateZoom()
                             val pan = event.calculatePan()
-                            val nextScale = (scale * zoom).coerceIn(1f, 5f)
+                            val nextScale = (scale * zoom).coerceIn(MIN_VIEWER_SCALE, MAX_VIEWER_SCALE)
                             scale = nextScale
-                            if (nextScale > 1f) {
+                            if (nextScale != 1f) {
                                 offsetX += pan.x
                                 offsetY += pan.y
                             } else {
@@ -1900,9 +2757,6 @@ private fun MediaViewer(
                                     kotlin.math.abs(totalSwipe) > viewConfiguration.touchSlop
                                 ) {
                                     verticalSwipeCaptured = true
-                                    if (settleRequest != null) {
-                                        settleRequest = null
-                                    }
                                     change?.consume()
                                 }
                             }
@@ -1910,99 +2764,131 @@ private fun MediaViewer(
                     } while (event.changes.any { it.pressed })
 
                     val intent = if (usedMultiTouch) null else SwipeIntent.fromVerticalDrag(totalSwipe)
-                    settleSerial += 1
                     when (intent) {
                         SwipeIntent.Next -> {
-                            if (hasNext && viewportHeight > 0f) {
+                            if (hasNext) {
                                 armedBoundaryIntent = null
-                                settleRequest = SwipeSettleRequest(
-                                    serial = settleSerial,
-                                    startOffsetY = 0f,
-                                    targetOffsetY = -viewportHeight,
-                                    intent = SwipeIntent.Next,
-                                )
-                            } else if (armedBoundaryIntent == SwipeIntent.Next && viewportHeight > 0f) {
+                                onNext()
+                            } else if (armedBoundaryIntent == SwipeIntent.Next) {
                                 boundaryFeedbackText = null
                                 armedBoundaryIntent = null
-                                settleRequest = SwipeSettleRequest(
-                                    serial = settleSerial,
-                                    startOffsetY = 0f,
-                                    targetOffsetY = -viewportHeight,
-                                    intent = SwipeIntent.Next,
-                                    wrapAround = true,
-                                )
+                                onFirst()
                             } else {
                                 boundaryFeedbackText = "已经是最后一张了"
                                 armedBoundaryIntent = SwipeIntent.Next
-                                settleRequest = SwipeSettleRequest(
-                                    serial = settleSerial,
-                                    startOffsetY = 0f,
-                                    targetOffsetY = 0f,
-                                    intent = null,
-                                )
                             }
                         }
 
                         SwipeIntent.Previous -> {
-                            if (hasPrevious && viewportHeight > 0f) {
+                            if (hasPrevious) {
                                 armedBoundaryIntent = null
-                                settleRequest = SwipeSettleRequest(
-                                    serial = settleSerial,
-                                    startOffsetY = 0f,
-                                    targetOffsetY = viewportHeight,
-                                    intent = SwipeIntent.Previous,
-                                )
-                            } else if (armedBoundaryIntent == SwipeIntent.Previous && viewportHeight > 0f) {
+                                onPrevious()
+                            } else if (armedBoundaryIntent == SwipeIntent.Previous) {
                                 boundaryFeedbackText = null
                                 armedBoundaryIntent = null
-                                settleRequest = SwipeSettleRequest(
-                                    serial = settleSerial,
-                                    startOffsetY = 0f,
-                                    targetOffsetY = viewportHeight,
-                                    intent = SwipeIntent.Previous,
-                                    wrapAround = true,
-                                )
+                                onLast()
                             } else {
                                 boundaryFeedbackText = "已经是第一张了"
                                 armedBoundaryIntent = SwipeIntent.Previous
-                                settleRequest = SwipeSettleRequest(
-                                    serial = settleSerial,
-                                    startOffsetY = 0f,
-                                    targetOffsetY = 0f,
-                                    intent = null,
-                                )
                             }
                         }
 
                         null -> {
                             armedBoundaryIntent = null
-                            settleRequest = SwipeSettleRequest(
-                                serial = settleSerial,
-                                startOffsetY = 0f,
-                                targetOffsetY = 0f,
-                                intent = null,
-                            )
                         }
                     }
                 }
             },
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .offset { IntOffset(x = 0, y = visibleSwipeOffsetY.toInt()) },
-        ) {
-            MediaSurface(
-                item = item,
-                scale = scale,
-                offsetX = offsetX,
-                offsetY = offsetY,
-                activeVideo = true,
-                onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
-            )
-        }
+        val mediaDisplayScale = scale * DEFAULT_SINGLE_MEDIA_DISPLAY_SCALE
+        MediaSurface(
+            item = item,
+            scale = mediaDisplayScale,
+            offsetX = offsetX,
+            offsetY = offsetY,
+            activeVideo = true,
+            onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
+            playbackMode = playbackMode,
+            onTogglePlaybackMode = onTogglePlaybackMode,
+            videoSegments = videoSegments,
+            onAddVideoSegment = onAddVideoSegment,
+            onDeleteVideoSegment = onDeleteVideoSegment,
+            onRenameVideoSegment = onRenameVideoSegment,
+            onOpenAuthorSearch = onOpenAuthorSearch,
+            isInDefaultFavoriteFolder = isInDefaultFavoriteFolder,
+            onToggleDefaultFavoriteFolder = onToggleDefaultFavoriteFolder,
+            initialPlaybackPositionMillis = initialPlaybackPositionMillis,
+            initialPlayWhenReady = initialPlayWhenReady,
+            onPlaybackStateChange = onVideoPlaybackStateChange,
+        )
 
         val actionBottomAnchor = maxHeight / 4
+        val showSingleVideoQuickPresets = item.mediaType == MediaType.Video && onReturnToMultiVideo == null
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            if (onReturnToMultiVideo != null) {
+                ReturnToMultiVideoButton(onClick = onReturnToMultiVideo)
+            } else {
+                MultiVideoModeButton(onClick = onEnterMultiVideoMode)
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ToneCurveButton(onClick = onOpenToneCurve)
+                    if (showSingleVideoQuickPresets) {
+                        Spacer(Modifier.width(6.dp))
+                        ToneCurveQuickPresetBar(
+                            toneCurve = LocalToneCurve.current,
+                            onToneCurveChange = onToneCurveChange,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(24.dp),
+                        )
+                    }
+                }
+                if (showSingleVideoQuickPresets) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        ColorAdjustmentButton(onClick = onOpenColorAdjustments)
+                        Spacer(Modifier.width(6.dp))
+                        ColorAdjustmentQuickPresetBar(
+                            colorAdjustments = LocalColorAdjustments.current,
+                            onColorAdjustmentsChange = onColorAdjustmentsChange,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(24.dp),
+                        )
+                    }
+                }
+            }
+            if (item.mediaType == MediaType.Video) {
+                Text(
+                    text = item.displayName,
+                    modifier = Modifier
+                        .widthIn(max = 280.dp)
+                        .padding(start = 12.dp),
+                    color = Color(0x99D0D0D0),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.End,
+                )
+            }
+        }
         if (item.mediaType == MediaType.Image) {
             ViewerFavoritePicker(
                 favoriteLevel = item.favoriteLevel,
@@ -2015,15 +2901,27 @@ private fun MediaViewer(
             )
             InfoButton(
                 displayName = item.displayName,
+                onOpenAuthorSearch = onOpenAuthorSearch,
                 modifier = Modifier.align(Alignment.BottomEnd),
             )
         }
-        ViewerDeleteButton(
-            onClick = onDeleteCurrentMedia,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = actionBottomAnchor + 54.dp),
-        )
+        if (item.mediaType == MediaType.Image) {
+            DefaultFavoriteFolderButton(
+                isFavorite = isInDefaultFavoriteFolder,
+                onClick = onToggleDefaultFavoriteFolder,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = actionBottomAnchor - 140.dp),
+            )
+        }
+        if (showDeleteAction) {
+            ViewerDeleteButton(
+                onClick = onDeleteCurrentMedia,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = actionBottomAnchor + 54.dp),
+            )
+        }
         ViewerTagRail(
             tags = allTags,
             selectedTags = selectedTags,
@@ -2059,15 +2957,2976 @@ private fun MediaViewer(
     }
 }
 
-private data class SwipeSettleRequest(
-    val serial: Int,
-    val startOffsetY: Float,
-    val targetOffsetY: Float,
-    val intent: SwipeIntent?,
-    val wrapAround: Boolean = false,
+@Composable
+private fun MultiVideoModeButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .size(38.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xB3151A22))
+            .border(1.dp, Color(0x66FFFFFF), RoundedCornerShape(12.dp))
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(15.dp)) {
+            val gap = 2.dp.toPx()
+            val dotSize = (size.minDimension - gap * 2f) / 3f
+            val color = Color.White
+            repeat(3) { row ->
+                repeat(3) { column ->
+                    drawRoundRect(
+                        color = color,
+                        topLeft = Offset(
+                            x = column * (dotSize + gap),
+                            y = row * (dotSize + gap),
+                        ),
+                        size = androidx.compose.ui.geometry.Size(dotSize, dotSize),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.dp.toPx(), 1.dp.toPx()),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReturnToMultiVideoButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        "返回多视频模式",
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xA9284B77))
+            .border(1.dp, Color(0x886FB7FF), RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        color = Color.White,
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.SemiBold,
+    )
+}
+
+@Composable
+private fun ToneCurveButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        "曲线",
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xAA242B38))
+            .border(1.dp, Color(0x667DD3FC), RoundedCornerShape(6.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+        color = Color.White,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+    )
+}
+
+@Composable
+private fun ColorAdjustmentButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        "颜色",
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xAA242B38))
+            .border(1.dp, Color(0x667DD3FC), RoundedCornerShape(6.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+        color = Color.White,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+    )
+}
+
+@Composable
+private fun ToneCurveQuickPresetBar(
+    toneCurve: ToneCurve,
+    onToneCurveChange: (ToneCurve) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val presetStore = remember(context) { ToneCurvePresetStore(context) }
+    var presets by remember(presetStore) { mutableStateOf(presetStore.load()) }
+
+    DisposableEffect(presetStore) {
+        val stopObserving = presetStore.observe {
+            presets = presetStore.load()
+        }
+        onDispose(stopObserving)
+    }
+
+    LazyRow(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        item {
+            ToneCurveQuickPresetButton(
+                label = "默认",
+                selected = toneCurve.isIdentity,
+                onClick = { onToneCurveChange(ToneCurve()) },
+            )
+        }
+        items(presets, key = { it.id }) { preset ->
+            ToneCurveQuickPresetButton(
+                label = preset.name,
+                selected = preset.curve.isCloseTo(toneCurve),
+                onClick = { onToneCurveChange(preset.curve) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ColorAdjustmentQuickPresetBar(
+    colorAdjustments: ColorAdjustments,
+    onColorAdjustmentsChange: (ColorAdjustments) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val presetStore = remember(context) { ColorAdjustmentPresetStore(context) }
+    var presets by remember(presetStore) { mutableStateOf(presetStore.load()) }
+
+    DisposableEffect(presetStore) {
+        val stopObserving = presetStore.observe {
+            presets = presetStore.load()
+        }
+        onDispose(stopObserving)
+    }
+
+    LazyRow(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        item {
+            ToneCurveQuickPresetButton(
+                label = "默认",
+                selected = colorAdjustments.isIdentity,
+                onClick = { onColorAdjustmentsChange(ColorAdjustments()) },
+            )
+        }
+        items(presets, key = { it.id }) { preset ->
+            ToneCurveQuickPresetButton(
+                label = preset.name,
+                selected = preset.adjustments.isCloseTo(colorAdjustments),
+                onClick = { onColorAdjustmentsChange(preset.adjustments) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ToneCurveQuickPresetButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(5.dp)
+    val background = if (selected) Color(0x883B82B6) else Color.Transparent
+    val border = if (selected) Color(0xFF90D8FF) else Color(0xDDEAF2FF)
+    Box(
+        modifier = Modifier
+            .height(24.dp)
+            .widthIn(min = 34.dp, max = 72.dp)
+            .clip(shape)
+            .background(background)
+            .border(1.dp, border, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = Color.White,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun ToneCurvePanel(
+    toneCurve: ToneCurve,
+    onToneCurveChange: (ToneCurve) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val presetStore = remember(context) { ToneCurvePresetStore(context) }
+    var presets by remember { mutableStateOf(presetStore.load()) }
+    var expandedPresetId by remember { mutableStateOf<String?>(null) }
+    val initialActivePresetId = remember { presets.firstOrNull { it.curve.isCloseTo(toneCurve) }?.id }
+    var activePresetId by remember { mutableStateOf<String?>(initialActivePresetId) }
+    var defaultPresetCurve by remember {
+        mutableStateOf(if (initialActivePresetId == null) toneCurve else ToneCurve())
+    }
+    var renamingPresetId by remember { mutableStateOf<String?>(null) }
+    var presetNameDraft by remember { mutableStateOf("") }
+    var isPresetNameDialogVisible by remember { mutableStateOf(false) }
+    var activePoint by remember { mutableStateOf<Int?>(null) }
+    val latestToneCurve by rememberUpdatedState(toneCurve)
+    val latestActivePresetId by rememberUpdatedState(activePresetId)
+    val latestPresets by rememberUpdatedState(presets)
+    val panelHeight = 446.dp
+    val panelHeightPx = with(LocalDensity.current) { panelHeight.toPx() }
+    val updateToneCurve: (ToneCurve) -> Unit = { nextCurve ->
+        onToneCurveChange(nextCurve)
+        val currentPresetId = activePresetId
+        if (currentPresetId == null) {
+            defaultPresetCurve = nextCurve
+        } else {
+            val nextPresets = presets.map { preset ->
+                if (preset.id == currentPresetId) preset.copy(curve = nextCurve) else preset
+            }
+            presets = nextPresets
+            presetStore.save(nextPresets)
+        }
+    }
+    val latestToneCurveChange by rememberUpdatedState<(ToneCurve) -> Unit> { nextCurve ->
+        onToneCurveChange(nextCurve)
+        val currentPresetId = latestActivePresetId
+        if (currentPresetId == null) {
+            defaultPresetCurve = nextCurve
+        } else {
+            val nextPresets = latestPresets.map { preset ->
+                if (preset.id == currentPresetId) preset.copy(curve = nextCurve) else preset
+            }
+            presets = nextPresets
+            presetStore.save(nextPresets)
+        }
+    }
+    val nodeInset = with(LocalDensity.current) { 12.dp.toPx() }
+    val curveColor = Color(0xFFF4F7FB)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(panelHeightPx) {
+                detectTapGestures { offset ->
+                    if (offset.y < size.height - panelHeightPx) {
+                        onDismiss()
+                    }
+                }
+            }
+            .background(Color(0x22000000)),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(panelHeight)
+                .background(Color(0xF4272B31))
+                .border(1.dp, Color(0x334F5968))
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("曲线 · RGB", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text(
+                        "重置",
+                        modifier = Modifier.clickable { updateToneCurve(ToneCurve()) },
+                        color = Color(0xFFB9C3D2),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        "完成",
+                        modifier = Modifier.clickable {
+                            onDismiss()
+                        },
+                        color = Color(0xFF8FD7FF),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+            Text(
+                "可输入百分比，或在数值框内上下滑动微调；5 个点均可拖动",
+                modifier = Modifier.padding(top = 4.dp),
+                color = Color(0xFF9EA9B9),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp)
+                    .height(38.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                item {
+                    ToneCurvePresetAddButton(
+                        onClick = {
+                            renamingPresetId = null
+                            presetNameDraft = ""
+                            isPresetNameDialogVisible = true
+                        },
+                    )
+                }
+                item {
+                    ToneCurveDefaultPresetButton(
+                        selected = activePresetId == null,
+                        onClick = {
+                            expandedPresetId = null
+                            activePresetId = null
+                            onToneCurveChange(defaultPresetCurve)
+                        },
+                    )
+                }
+                items(presets, key = { it.id }) { preset ->
+                    ToneCurvePresetButton(
+                        preset = preset,
+                        selected = activePresetId == preset.id,
+                        showActions = expandedPresetId == preset.id,
+                        onApply = {
+                            expandedPresetId = null
+                            activePresetId = preset.id
+                            onToneCurveChange(preset.curve)
+                        },
+                        onLongClick = {
+                            expandedPresetId = if (expandedPresetId == preset.id) null else preset.id
+                        },
+                        onRename = {
+                            expandedPresetId = null
+                            renamingPresetId = preset.id
+                            presetNameDraft = preset.name
+                            isPresetNameDialogVisible = true
+                        },
+                        onDelete = {
+                            val next = presets.filterNot { it.id == preset.id }
+                            presets = next
+                            presetStore.save(next)
+                            if (activePresetId == preset.id) {
+                                activePresetId = null
+                                onToneCurveChange(defaultPresetCurve)
+                            }
+                            if (renamingPresetId == preset.id) renamingPresetId = null
+                            expandedPresetId = null
+                        },
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                val labels = listOf("黑场", "暗部", "中调", "亮部", "白场")
+                toneCurve.pointValues.forEachIndexed { index, value ->
+                    ToneCurveValueEditor(
+                        label = labels[index],
+                        value = value,
+                        onValueChange = { nextValue ->
+                            updateToneCurve(toneCurve.withPoint(index, nextValue))
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(vertical = 14.dp)
+                    .pointerInput(Unit) {
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                val curve = latestToneCurve
+                                val graphWidth = (size.width - nodeInset * 2f).coerceAtLeast(1f)
+                                val graphHeight = (size.height - nodeInset * 2f).coerceAtLeast(1f)
+                                activePoint = curve.pointValues.indices.minByOrNull { index ->
+                                    val x = nodeInset + graphWidth * ToneCurve.POINT_X[index]
+                                    val y = size.height - nodeInset - graphHeight * curve.pointValues[index]
+                                    val dx = x - offset.x
+                                    val dy = y - offset.y
+                                    dx * dx + dy * dy
+                                }
+                            },
+                            onDragEnd = { activePoint = null },
+                            onDragCancel = { activePoint = null },
+                        ) { change, _ ->
+                            val point = activePoint ?: return@detectDragGestures
+                            val graphHeight = (size.height - nodeInset * 2f).coerceAtLeast(1f)
+                            val nextValue = ((size.height - nodeInset - change.position.y) / graphHeight)
+                                .coerceIn(0f, 1f)
+                            latestToneCurveChange(latestToneCurve.withPoint(point, nextValue))
+                            change.consume()
+                        }
+                    },
+            ) {
+                val graphLeft = nodeInset
+                val graphTop = nodeInset
+                val graphRight = size.width - nodeInset
+                val graphBottom = size.height - nodeInset
+                val graphWidth = (graphRight - graphLeft).coerceAtLeast(1f)
+                val graphHeight = (graphBottom - graphTop).coerceAtLeast(1f)
+                val x = ToneCurve.POINT_X.map { graphLeft + graphWidth * it }.toFloatArray()
+                val y = toneCurve.pointValues
+                repeat(5) { index ->
+                    val horizontalProgress = index / 4f
+                    val verticalProgress = index / 4f
+                    drawLine(
+                        Color(0x333E4B5C),
+                        Offset(graphLeft + graphWidth * horizontalProgress, graphTop),
+                        Offset(graphLeft + graphWidth * horizontalProgress, graphBottom),
+                        1.dp.toPx(),
+                    )
+                    drawLine(
+                        Color(0x333E4B5C),
+                        Offset(graphLeft, graphTop + graphHeight * verticalProgress),
+                        Offset(graphRight, graphTop + graphHeight * verticalProgress),
+                        1.dp.toPx(),
+                    )
+                }
+                val path = Path().apply {
+                    moveTo(x.first(), graphBottom - graphHeight * y.first())
+                    for (index in 1 until x.size) {
+                        lineTo(x[index], graphBottom - graphHeight * y[index])
+                    }
+                }
+                drawPath(path, curveColor, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+                for (index in y.indices) {
+                    drawCircle(
+                        color = Color(0xFF15191F),
+                        radius = 9.dp.toPx(),
+                        center = Offset(x[index], graphBottom - graphHeight * y[index]),
+                    )
+                    drawCircle(
+                        color = curveColor,
+                        radius = 5.dp.toPx(),
+                        center = Offset(x[index], graphBottom - graphHeight * y[index]),
+                    )
+                }
+            }
+        }
+        if (isPresetNameDialogVisible) {
+            val renamingPreset = presets.firstOrNull { it.id == renamingPresetId }
+            AlertDialog(
+                onDismissRequest = {
+                    isPresetNameDialogVisible = false
+                    renamingPresetId = null
+                },
+                title = { Text(if (renamingPreset == null) "保存曲线预设" else "重命名曲线预设") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            if (renamingPreset == null) {
+                                "给这一组曲线参数起个名字，之后可一键套用。"
+                            } else {
+                                "只修改这个参数组的名称，不改变当前曲线参数。"
+                            },
+                        )
+                        TextField(
+                            value = presetNameDraft,
+                            onValueChange = { presetNameDraft = it },
+                            singleLine = true,
+                            label = { Text("预设名称") },
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val name = presetNameDraft.trim().ifBlank {
+                                if (renamingPreset == null) "曲线预设 ${presets.size + 1}" else renamingPreset.name
+                            }
+                            val next = if (renamingPreset == null) {
+                                val id = UUID.randomUUID().toString()
+                                activePresetId = id
+                                presets + ToneCurvePreset(
+                                    id = id,
+                                    name = name,
+                                    curve = toneCurve,
+                                )
+                            } else {
+                                presets.map { preset ->
+                                    if (preset.id == renamingPreset.id) {
+                                        preset.copy(name = name)
+                                    } else {
+                                        preset
+                                    }
+                                }
+                            }
+                            presets = next
+                            presetStore.save(next)
+                            isPresetNameDialogVisible = false
+                            renamingPresetId = null
+                        },
+                    ) { Text(if (renamingPreset == null) "保存" else "重命名") }
+                },
+                dismissButton = {
+                    Text(
+                        "取消",
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                isPresetNameDialogVisible = false
+                                renamingPresetId = null
+                            }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                },
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ColorAdjustmentPanel(
+    colorAdjustments: ColorAdjustments,
+    onColorAdjustmentsChange: (ColorAdjustments) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val presetStore = remember(context) { ColorAdjustmentPresetStore(context) }
+    var presets by remember { mutableStateOf(presetStore.load()) }
+    var expandedPresetId by remember { mutableStateOf<String?>(null) }
+    val initialActivePresetId = remember {
+        presets.firstOrNull { it.adjustments.isCloseTo(colorAdjustments) }?.id
+    }
+    var activePresetId by remember { mutableStateOf<String?>(initialActivePresetId) }
+    var defaultPresetAdjustments by remember {
+        mutableStateOf(if (initialActivePresetId == null) colorAdjustments else ColorAdjustments())
+    }
+    var renamingPresetId by remember { mutableStateOf<String?>(null) }
+    var presetNameDraft by remember { mutableStateOf("") }
+    var isPresetNameDialogVisible by remember { mutableStateOf(false) }
+    val latestActivePresetId by rememberUpdatedState(activePresetId)
+    val latestPresets by rememberUpdatedState(presets)
+    val panelHeight = 446.dp
+    val panelHeightPx = with(LocalDensity.current) { panelHeight.toPx() }
+    val updateAdjustments: (ColorAdjustments) -> Unit = { nextAdjustments ->
+        onColorAdjustmentsChange(nextAdjustments)
+        val currentPresetId = activePresetId
+        if (currentPresetId == null) {
+            defaultPresetAdjustments = nextAdjustments
+        } else {
+            val nextPresets = presets.map { preset ->
+                if (preset.id == currentPresetId) preset.copy(adjustments = nextAdjustments) else preset
+            }
+            presets = nextPresets
+            presetStore.save(nextPresets)
+        }
+    }
+    val latestAdjustmentChange by rememberUpdatedState<(ColorAdjustments) -> Unit> { nextAdjustments ->
+        onColorAdjustmentsChange(nextAdjustments)
+        val currentPresetId = latestActivePresetId
+        if (currentPresetId == null) {
+            defaultPresetAdjustments = nextAdjustments
+        } else {
+            val nextPresets = latestPresets.map { preset ->
+                if (preset.id == currentPresetId) preset.copy(adjustments = nextAdjustments) else preset
+            }
+            presets = nextPresets
+            presetStore.save(nextPresets)
+        }
+    }
+    val controls = listOf(
+        ColorAdjustmentControl("锐度", 0f..1f, colorAdjustments.sharpness) {
+            colorAdjustments.copy(sharpness = it)
+        },
+        ColorAdjustmentControl("对比度", -1f..1f, colorAdjustments.contrast) {
+            colorAdjustments.copy(contrast = it)
+        },
+        ColorAdjustmentControl("自然饱和度", -1f..1f, colorAdjustments.vibrance) {
+            colorAdjustments.copy(vibrance = it)
+        },
+        ColorAdjustmentControl("红色系", -1f..1f, colorAdjustments.redAccent) {
+            colorAdjustments.copy(redAccent = it)
+        },
+        ColorAdjustmentControl("蓝色系", -1f..1f, colorAdjustments.blueAccent) {
+            colorAdjustments.copy(blueAccent = it)
+        },
+        ColorAdjustmentControl("紫色系", -1f..1f, colorAdjustments.purpleAccent) {
+            colorAdjustments.copy(purpleAccent = it)
+        },
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(panelHeightPx) {
+                detectTapGestures { offset ->
+                    if (offset.y < size.height - panelHeightPx) {
+                        onDismiss()
+                    }
+                }
+            }
+            .background(Color(0x22000000)),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(panelHeight)
+                .background(Color(0xF4272B31))
+                .border(1.dp, Color(0x334F5968))
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("颜色", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text(
+                        "重置",
+                        modifier = Modifier.clickable { updateAdjustments(ColorAdjustments()) },
+                        color = Color(0xFFB9C3D2),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        "完成",
+                        modifier = Modifier.clickable { onDismiss() },
+                        color = Color(0xFF8FD7FF),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+            Text(
+                "正值增强，负值减淡；红/蓝/紫只命中对应色系",
+                modifier = Modifier.padding(top = 4.dp),
+                color = Color(0xFF9EA9B9),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp)
+                    .height(38.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                item {
+                    ToneCurvePresetAddButton(
+                        onClick = {
+                            renamingPresetId = null
+                            presetNameDraft = ""
+                            isPresetNameDialogVisible = true
+                        },
+                    )
+                }
+                item {
+                    ToneCurveDefaultPresetButton(
+                        selected = activePresetId == null,
+                        onClick = {
+                            expandedPresetId = null
+                            activePresetId = null
+                            onColorAdjustmentsChange(defaultPresetAdjustments)
+                        },
+                    )
+                }
+                items(presets, key = { it.id }) { preset ->
+                    ColorAdjustmentPresetButton(
+                        name = preset.name,
+                        selected = activePresetId == preset.id,
+                        showActions = expandedPresetId == preset.id,
+                        onApply = {
+                            expandedPresetId = null
+                            activePresetId = preset.id
+                            onColorAdjustmentsChange(preset.adjustments)
+                        },
+                        onLongClick = {
+                            expandedPresetId = if (expandedPresetId == preset.id) null else preset.id
+                        },
+                        onRename = {
+                            expandedPresetId = null
+                            renamingPresetId = preset.id
+                            presetNameDraft = preset.name
+                            isPresetNameDialogVisible = true
+                        },
+                        onDelete = {
+                            val next = presets.filterNot { it.id == preset.id }
+                            presets = next
+                            presetStore.save(next)
+                            if (activePresetId == preset.id) {
+                                activePresetId = null
+                                onColorAdjustmentsChange(defaultPresetAdjustments)
+                            }
+                            if (renamingPresetId == preset.id) renamingPresetId = null
+                            expandedPresetId = null
+                        },
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(top = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                controls.forEach { control ->
+                    ColorAdjustmentValueEditor(
+                        label = control.label,
+                        value = control.value,
+                        range = control.range,
+                        onValueChange = { nextValue ->
+                            latestAdjustmentChange(control.copyValue(nextValue))
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+        if (isPresetNameDialogVisible) {
+            val renamingPreset = presets.firstOrNull { it.id == renamingPresetId }
+            AlertDialog(
+                onDismissRequest = {
+                    isPresetNameDialogVisible = false
+                    renamingPresetId = null
+                },
+                title = { Text(if (renamingPreset == null) "保存颜色预设" else "重命名颜色预设") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            if (renamingPreset == null) {
+                                "给这一组颜色参数起个名字，之后可一键套用。"
+                            } else {
+                                "只修改这个参数组的名称，不改变当前颜色参数。"
+                            },
+                        )
+                        TextField(
+                            value = presetNameDraft,
+                            onValueChange = { presetNameDraft = it },
+                            singleLine = true,
+                            label = { Text("预设名称") },
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val name = presetNameDraft.trim().ifBlank {
+                                if (renamingPreset == null) "颜色预设 ${presets.size + 1}" else renamingPreset.name
+                            }
+                            val next = if (renamingPreset == null) {
+                                val id = UUID.randomUUID().toString()
+                                activePresetId = id
+                                presets + ColorAdjustmentPreset(
+                                    id = id,
+                                    name = name,
+                                    adjustments = colorAdjustments,
+                                )
+                            } else {
+                                presets.map { preset ->
+                                    if (preset.id == renamingPreset.id) preset.copy(name = name) else preset
+                                }
+                            }
+                            presets = next
+                            presetStore.save(next)
+                            isPresetNameDialogVisible = false
+                            renamingPresetId = null
+                        },
+                    ) { Text(if (renamingPreset == null) "保存" else "重命名") }
+                },
+                dismissButton = {
+                    Text(
+                        "取消",
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                isPresetNameDialogVisible = false
+                                renamingPresetId = null
+                            }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
+                },
+            )
+        }
+    }
+}
+
+private data class ColorAdjustmentControl(
+    val label: String,
+    val range: ClosedFloatingPointRange<Float>,
+    val value: Float,
+    val copyValue: (Float) -> ColorAdjustments,
 )
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ColorAdjustmentPresetButton(
+    name: String,
+    selected: Boolean,
+    showActions: Boolean,
+    onApply: () -> Unit,
+    onLongClick: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val background = if (selected) Color(0xFF274B63) else Color(0xFF1B222C)
+    val border = if (selected) Color(0xCC8FD7FF) else Color(0x334F5968)
+    val textColor = if (selected) Color(0xFFE7F7FF) else Color(0xFFEAF2FF)
+    Box(
+        modifier = Modifier
+            .height(38.dp)
+            .widthIn(min = 56.dp, max = 156.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .height(32.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(background)
+                .border(1.dp, border, RoundedCornerShape(9.dp))
+                .combinedClickable(onClick = onApply, onLongClick = onLongClick)
+                .padding(horizontal = if (showActions) 18.dp else 11.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                name,
+                color = textColor,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (showActions) {
+            ToneCurvePresetActionButton(
+                icon = Icons.Rounded.Edit,
+                contentDescription = "重命名预设",
+                tint = Color(0xFFA9D8FF),
+                background = Color(0x553A7CA8),
+                modifier = Modifier.align(Alignment.TopStart),
+                onClick = onRename,
+            )
+            ToneCurvePresetActionButton(
+                icon = Icons.Rounded.Close,
+                contentDescription = "删除预设",
+                tint = Color(0xFFFFB0B0),
+                background = Color(0x55A84343),
+                modifier = Modifier.align(Alignment.TopEnd),
+                onClick = onDelete,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ColorAdjustmentValueEditor(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val knobSize = 30.dp
+    val valueRange = (range.endInclusive - range.start).coerceAtLeast(0.001f)
+    val fraction = ((value - range.start) / valueRange).coerceIn(0f, 1f)
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            label,
+            modifier = Modifier.fillMaxWidth(),
+            color = Color(0xFFB7C2D1),
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
+        Row(
+            modifier = Modifier
+                .padding(top = 5.dp)
+                .fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .height(44.dp)
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF151D28)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    formatColorAdjustmentValue(value),
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                )
+            }
+            ParameterStepButtons(
+                onIncrement = {
+                    onValueChange((value + PARAMETER_STEP).coerceIn(range.start, range.endInclusive))
+                },
+                onDecrement = {
+                    onValueChange((value - PARAMETER_STEP).coerceIn(range.start, range.endInclusive))
+                },
+                modifier = Modifier.height(44.dp),
+            )
+        }
+        BoxWithConstraints(
+            modifier = Modifier
+                .padding(top = 10.dp)
+                .height(214.dp)
+                .fillMaxWidth()
+                .pointerInput(range) {
+                    fun valueAt(y: Float): Float {
+                        val knobPx = with(density) { knobSize.toPx() }
+                        val usableHeight = (size.height - knobPx).coerceAtLeast(1f)
+                        val knobTop = (y - knobPx / 2f).coerceIn(0f, usableHeight)
+                        val nextFraction = 1f - knobTop / usableHeight
+                        return (range.start + valueRange * nextFraction)
+                            .coerceIn(range.start, range.endInclusive)
+                    }
+                    detectDragGestures(
+                        onDragStart = { offset -> onValueChange(valueAt(offset.y)) },
+                    ) { change, _ ->
+                        onValueChange(valueAt(change.position.y))
+                        change.consume()
+                    }
+                },
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            val knobOffsetY = with(density) {
+                ((1f - fraction) * (maxHeight.toPx() - knobSize.toPx()))
+                    .roundToInt()
+                    .coerceAtLeast(0)
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(6.dp)
+                    .padding(vertical = knobSize / 2)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(Color(0xFF121923)),
+            )
+            if (range.start < 0f && range.endInclusive > 0f) {
+                val zeroFraction = ((0f - range.start) / valueRange).coerceIn(0f, 1f)
+                val zeroOffsetY = with(density) {
+                    ((1f - zeroFraction) * (maxHeight.toPx() - 1.dp.toPx()))
+                        .roundToInt()
+                        .coerceAtLeast(0)
+                }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .offset { IntOffset(0, zeroOffsetY) }
+                        .width(26.dp)
+                        .height(1.dp)
+                        .background(Color(0x66788894)),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset { IntOffset(0, knobOffsetY) }
+                    .size(knobSize)
+                    .clip(RoundedCornerShape(15.dp))
+                    .background(Color(0xFF8FD7FF))
+                    .border(2.dp, Color(0xFFEAF7FF), RoundedCornerShape(15.dp)),
+            )
+        }
+    }
+}
+
+private fun formatColorAdjustmentValue(value: Float): String {
+    return (value * 100f).roundToInt().toString()
+}
+
+@Composable
+private fun ToneCurvePresetAddButton(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(width = 38.dp, height = 32.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(Color(0xFF253446))
+            .border(1.dp, Color(0x668FD7FF), RoundedCornerShape(9.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Add,
+            contentDescription = "保存当前曲线",
+            tint = Color(0xFFBDE6FF),
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+@Composable
+private fun ToneCurveDefaultPresetButton(
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val background = if (selected) Color(0xFF274B63) else Color(0xFF1B222C)
+    val border = if (selected) Color(0xCC8FD7FF) else Color(0x334F5968)
+    val textColor = if (selected) Color(0xFFE7F7FF) else Color(0xFFEAF2FF)
+    Box(
+        modifier = Modifier
+            .height(32.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .background(background)
+            .border(1.dp, border, RoundedCornerShape(9.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 11.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "默认",
+            color = textColor,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ToneCurvePresetButton(
+    preset: ToneCurvePreset,
+    selected: Boolean,
+    showActions: Boolean,
+    onApply: () -> Unit,
+    onLongClick: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val background = if (selected) Color(0xFF274B63) else Color(0xFF1B222C)
+    val border = if (selected) Color(0xCC8FD7FF) else Color(0x334F5968)
+    val textColor = if (selected) Color(0xFFE7F7FF) else Color(0xFFEAF2FF)
+    Box(
+        modifier = Modifier
+            .height(38.dp)
+            .widthIn(min = 56.dp, max = 156.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .height(32.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(background)
+                .border(1.dp, border, RoundedCornerShape(9.dp))
+                .combinedClickable(onClick = onApply, onLongClick = onLongClick)
+                .padding(horizontal = if (showActions) 18.dp else 11.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                preset.name,
+                color = textColor,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (showActions) {
+            ToneCurvePresetActionButton(
+                icon = Icons.Rounded.Edit,
+                contentDescription = "重命名预设",
+                tint = Color(0xFFA9D8FF),
+                background = Color(0x553A7CA8),
+                modifier = Modifier.align(Alignment.TopStart),
+                onClick = onRename,
+            )
+            ToneCurvePresetActionButton(
+                icon = Icons.Rounded.Close,
+                contentDescription = "删除预设",
+                tint = Color(0xFFFFB0B0),
+                background = Color(0x55A83A3A),
+                modifier = Modifier.align(Alignment.TopEnd),
+                onClick = onDelete,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ToneCurvePresetActionButton(
+    icon: ImageVector,
+    contentDescription: String,
+    tint: Color,
+    background: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .size(17.dp)
+            .clip(CircleShape)
+            .background(background)
+            .border(1.dp, tint.copy(alpha = 0.65f), CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier.size(11.dp),
+        )
+    }
+}
+
+@Composable
+private fun ToneCurveValueEditor(
+    label: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var text by remember { mutableStateOf(formatToneCurveValue(value)) }
+    var isFocused by remember { mutableStateOf(false) }
+    var dragStartValue by remember { mutableFloatStateOf(0f) }
+    var dragDistance by remember { mutableFloatStateOf(0f) }
+    val latestValue by rememberUpdatedState(value)
+    val latestValueChange by rememberUpdatedState(onValueChange)
+
+    LaunchedEffect(value, isFocused) {
+        if (!isFocused) text = formatToneCurveValue(value)
+    }
+
+    Column(modifier = modifier) {
+        Text(
+            label,
+            modifier = Modifier.fillMaxWidth(),
+            color = Color(0xFF9EA9B9),
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.Center,
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp)
+                .height(44.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicTextField(
+                value = text,
+                onValueChange = { input ->
+                    text = input
+                    input.toFloatOrNull()?.let { percent ->
+                        onValueChange((percent / 100f).coerceIn(0f, 1f))
+                    }
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .onFocusChanged { focusState ->
+                        isFocused = focusState.isFocused
+                        if (!focusState.isFocused) {
+                            text.toFloatOrNull()?.let { percent ->
+                                onValueChange((percent / 100f).coerceIn(0f, 1f))
+                            }
+                            text = formatToneCurveValue(value)
+                        }
+                    }
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures(
+                            onDragStart = {
+                                dragStartValue = latestValue
+                                dragDistance = 0f
+                            },
+                        ) { change, dragAmount ->
+                            dragDistance += dragAmount
+                            val nextValue = (dragStartValue - dragDistance / 500f).coerceIn(0f, 1f)
+                            latestValueChange(nextValue)
+                            text = formatToneCurveValue(nextValue)
+                            change.consume()
+                        }
+                    },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+                decorationBox = { innerTextField ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF1B222C))
+                            .border(1.dp, if (isFocused) Color(0xFF82D4FF) else Color(0x334F5968), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 4.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        innerTextField()
+                    }
+                },
+            )
+            ParameterStepButtons(
+                onIncrement = {
+                    val nextValue = (value + PARAMETER_STEP).coerceIn(0f, 1f)
+                    onValueChange(nextValue)
+                    text = formatToneCurveValue(nextValue)
+                },
+                onDecrement = {
+                    val nextValue = (value - PARAMETER_STEP).coerceIn(0f, 1f)
+                    onValueChange(nextValue)
+                    text = formatToneCurveValue(nextValue)
+                },
+                modifier = Modifier.height(44.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ParameterStepButtons(
+    onIncrement: () -> Unit,
+    onDecrement: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.width(34.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        ParameterStepButton(
+            icon = Icons.Rounded.ArrowUpward,
+            contentDescription = "增加 1",
+            onClick = onIncrement,
+            modifier = Modifier.weight(1f),
+        )
+        ParameterStepButton(
+            icon = Icons.Rounded.ArrowDownward,
+            contentDescription = "减少 1",
+            onClick = onDecrement,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun ParameterStepButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xFF182333))
+            .border(1.dp, Color(0x668FD7FF), RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = Color(0xFFBDE6FF),
+            modifier = Modifier.size(14.dp),
+        )
+    }
+}
+
+private const val PARAMETER_STEP = 0.01f
+
+private fun formatToneCurveValue(value: Float): String {
+    val percent = (value.coerceIn(0f, 1f) * 100f)
+    return if (kotlin.math.abs(percent - percent.roundToInt()) < 0.05f) {
+        percent.roundToInt().toString()
+    } else {
+        String.format(Locale.US, "%.1f", percent)
+    }
+}
+
+@Composable
+private fun MultiMediaViewer(
+    session: MultiMediaSession,
+    videoSegmentsByUri: Map<String, List<VideoSegment>>,
+    onPickMediaSlot: (MultiMediaSlot) -> Unit,
+    onSearchAuthor: (MultiMediaSlot, String) -> Unit,
+    onExpandMediaSlot: (MultiMediaSlot, Map<MultiMediaSlot, MultiMediaPlaybackSnapshot>) -> Unit,
+    onRemoveMediaSlot: (MultiMediaSlot, Map<MultiMediaSlot, MultiMediaPlaybackSnapshot>) -> Unit,
+    onPaneItemChange: (MultiMediaSlot, MediaItem) -> Unit,
+    onPanePlaybackStateChange: (MultiMediaSlot, Long, Boolean, Float) -> Unit,
+    onOpenTemporarySingleMedia: (MultiMediaSlot, Long, Boolean, Float) -> Unit,
+    onOpenToneCurve: () -> Unit,
+    onExit: () -> Unit,
+) {
+    var topPaneFraction by remember { mutableFloatStateOf(0.5f) }
+    var topColumnFraction by remember { mutableFloatStateOf(0.5f) }
+    var bottomColumnFraction by remember { mutableFloatStateOf(0.5f) }
+    var playbackSnapshots by remember { mutableStateOf<Map<MultiMediaSlot, MultiMediaPlaybackSnapshot>>(emptyMap()) }
+    val density = LocalDensity.current
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+    ) {
+        val viewportHeightPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
+        Column(Modifier.fillMaxSize()) {
+            MultiMediaRow(
+                leftSlot = MultiMediaSlot.TopLeft,
+                rightSlot = MultiMediaSlot.TopRight,
+                leftPane = session.topLeft,
+                rightPane = session.topRight,
+                isRightExpanded = session.topRightExpanded,
+                leftFraction = topColumnFraction,
+                onLeftFractionChange = { topColumnFraction = it },
+                onPickMediaSlot = onPickMediaSlot,
+                onSearchAuthor = onSearchAuthor,
+                onExpandMediaSlot = { slot ->
+                    topColumnFraction = 0.5f
+                    onExpandMediaSlot(slot, playbackSnapshots)
+                },
+                onRemoveMediaSlot = { slot -> onRemoveMediaSlot(slot, playbackSnapshots) },
+                onPaneItemChange = onPaneItemChange,
+                onPanePlaybackStateChange = onPanePlaybackStateChange,
+                onPanePlaybackSnapshot = { slot, positionMillis, playWhenReady, scale ->
+                    playbackSnapshots = playbackSnapshots + (
+                        slot to MultiMediaPlaybackSnapshot(positionMillis, playWhenReady, scale)
+                    )
+                },
+                onOpenTemporarySingleMedia = onOpenTemporarySingleMedia,
+                videoSegmentsByUri = videoSegmentsByUri,
+                modifier = Modifier.weight(topPaneFraction),
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(12.dp)
+                    .background(Color(0xFF10151E))
+                    .pointerInput(viewportHeightPx) {
+                        detectVerticalDragGestures { change, dragAmount ->
+                            change.consume()
+                            topPaneFraction = (topPaneFraction + dragAmount / viewportHeightPx)
+                                .coerceIn(0.2f, 0.8f)
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(56.dp)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(99.dp))
+                        .background(Color(0x99FFFFFF)),
+                )
+            }
+            MultiMediaRow(
+                leftSlot = MultiMediaSlot.BottomLeft,
+                rightSlot = MultiMediaSlot.BottomRight,
+                leftPane = session.bottomLeft,
+                rightPane = session.bottomRight,
+                isRightExpanded = session.bottomRightExpanded,
+                leftFraction = bottomColumnFraction,
+                onLeftFractionChange = { bottomColumnFraction = it },
+                onPickMediaSlot = onPickMediaSlot,
+                onSearchAuthor = onSearchAuthor,
+                onExpandMediaSlot = { slot ->
+                    bottomColumnFraction = 0.5f
+                    onExpandMediaSlot(slot, playbackSnapshots)
+                },
+                onRemoveMediaSlot = { slot -> onRemoveMediaSlot(slot, playbackSnapshots) },
+                onPaneItemChange = onPaneItemChange,
+                onPanePlaybackStateChange = onPanePlaybackStateChange,
+                onPanePlaybackSnapshot = { slot, positionMillis, playWhenReady, scale ->
+                    playbackSnapshots = playbackSnapshots + (
+                        slot to MultiMediaPlaybackSnapshot(positionMillis, playWhenReady, scale)
+                    )
+                },
+                onOpenTemporarySingleMedia = onOpenTemporarySingleMedia,
+                videoSegmentsByUri = videoSegmentsByUri,
+                modifier = Modifier.weight(1f - topPaneFraction),
+            )
+        }
+        Text(
+            "单屏",
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 14.dp, top = 14.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color(0xB3151A22))
+                .border(1.dp, Color(0x66FFFFFF), RoundedCornerShape(10.dp))
+                .clickable { onExit() }
+                .padding(horizontal = 11.dp, vertical = 7.dp),
+            color = Color.White,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        ToneCurveButton(
+            onClick = onOpenToneCurve,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 76.dp, top = 14.dp),
+        )
+    }
+}
+
+@Composable
+private fun MultiMediaRow(
+    leftSlot: MultiMediaSlot,
+    rightSlot: MultiMediaSlot,
+    leftPane: MultiMediaPaneSession?,
+    rightPane: MultiMediaPaneSession?,
+    isRightExpanded: Boolean,
+    leftFraction: Float,
+    onLeftFractionChange: (Float) -> Unit,
+    onPickMediaSlot: (MultiMediaSlot) -> Unit,
+    onSearchAuthor: (MultiMediaSlot, String) -> Unit,
+    onExpandMediaSlot: (MultiMediaSlot) -> Unit,
+    onRemoveMediaSlot: (MultiMediaSlot) -> Unit,
+    onPaneItemChange: (MultiMediaSlot, MediaItem) -> Unit,
+    onPanePlaybackStateChange: (MultiMediaSlot, Long, Boolean, Float) -> Unit,
+    onPanePlaybackSnapshot: (MultiMediaSlot, Long, Boolean, Float) -> Unit,
+    onOpenTemporarySingleMedia: (MultiMediaSlot, Long, Boolean, Float) -> Unit,
+    videoSegmentsByUri: Map<String, List<VideoSegment>>,
+    modifier: Modifier = Modifier,
+) {
+    if (!isRightExpanded) {
+        Box(modifier = modifier.fillMaxWidth()) {
+            MultiMediaPaneOrEmpty(
+                pane = leftPane,
+                slot = leftSlot,
+                onPickMediaSlot = onPickMediaSlot,
+                onPaneItemChange = onPaneItemChange,
+                onSearchAuthor = { authorId -> onSearchAuthor(leftSlot, authorId) },
+                onPlaybackStateChange = { position, shouldPlay, scale ->
+                    onPanePlaybackStateChange(leftSlot, position, shouldPlay, scale)
+                },
+                onPlaybackSnapshot = { position, shouldPlay, scale ->
+                    onPanePlaybackSnapshot(leftSlot, position, shouldPlay, scale)
+                },
+                onOpenTemporarySingle = { position, shouldPlay, scale ->
+                    onOpenTemporarySingleMedia(leftSlot, position, shouldPlay, scale)
+                },
+                onSelectNewMedia = { onPickMediaSlot(leftSlot) },
+                onRemove = { onRemoveMediaSlot(leftSlot) },
+                videoSegmentsByUri = videoSegmentsByUri,
+                modifier = Modifier.fillMaxSize(),
+            )
+            MultiMediaRowAddButton(
+                onClick = { onExpandMediaSlot(rightSlot) },
+                modifier = Modifier
+                    .align(Alignment.CenterEnd),
+            )
+        }
+        return
+    }
+
+    val density = LocalDensity.current
+    val latestLeftFraction by rememberUpdatedState(leftFraction)
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val viewportWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+        Row(Modifier.fillMaxSize()) {
+            MultiMediaPaneOrEmpty(
+                pane = leftPane,
+                slot = leftSlot,
+                onPickMediaSlot = onPickMediaSlot,
+                onPaneItemChange = onPaneItemChange,
+                onSearchAuthor = { authorId -> onSearchAuthor(leftSlot, authorId) },
+                onPlaybackStateChange = { position, shouldPlay, scale ->
+                    onPanePlaybackStateChange(leftSlot, position, shouldPlay, scale)
+                },
+                onPlaybackSnapshot = { position, shouldPlay, scale ->
+                    onPanePlaybackSnapshot(leftSlot, position, shouldPlay, scale)
+                },
+                onOpenTemporarySingle = { position, shouldPlay, scale ->
+                    onOpenTemporarySingleMedia(leftSlot, position, shouldPlay, scale)
+                },
+                onSelectNewMedia = { onPickMediaSlot(leftSlot) },
+                onRemove = { onRemoveMediaSlot(leftSlot) },
+                videoSegmentsByUri = videoSegmentsByUri,
+                modifier = Modifier
+                    .weight(leftFraction)
+                    .fillMaxHeight(),
+            )
+            Box(
+                modifier = Modifier
+                    .width(24.dp)
+                    .fillMaxHeight()
+                    .background(Color(0xFF10151E))
+                    .pointerInput(viewportWidthPx) {
+                        var draggedFraction = 0f
+                        detectHorizontalDragGestures(
+                            onDragStart = { draggedFraction = latestLeftFraction },
+                        ) { change, dragAmount ->
+                            change.consume()
+                            draggedFraction = (draggedFraction + dragAmount / viewportWidthPx)
+                                .coerceIn(0.2f, 0.8f)
+                            onLeftFractionChange(draggedFraction)
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(4.dp)
+                        .height(56.dp)
+                        .clip(RoundedCornerShape(99.dp))
+                        .background(Color(0x99FFFFFF)),
+                )
+            }
+            MultiMediaPaneOrEmpty(
+                pane = rightPane,
+                slot = rightSlot,
+                onPickMediaSlot = onPickMediaSlot,
+                onPaneItemChange = onPaneItemChange,
+                onSearchAuthor = { authorId -> onSearchAuthor(rightSlot, authorId) },
+                onPlaybackStateChange = { position, shouldPlay, scale ->
+                    onPanePlaybackStateChange(rightSlot, position, shouldPlay, scale)
+                },
+                onPlaybackSnapshot = { position, shouldPlay, scale ->
+                    onPanePlaybackSnapshot(rightSlot, position, shouldPlay, scale)
+                },
+                onOpenTemporarySingle = { position, shouldPlay, scale ->
+                    onOpenTemporarySingleMedia(rightSlot, position, shouldPlay, scale)
+                },
+                onSelectNewMedia = { onPickMediaSlot(rightSlot) },
+                onRemove = { onRemoveMediaSlot(rightSlot) },
+                videoSegmentsByUri = videoSegmentsByUri,
+                modifier = Modifier
+                    .weight(1f - leftFraction)
+                    .fillMaxHeight(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun MultiMediaRowAddButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val leftHalfCircle = RoundedCornerShape(
+        topStart = 24.dp,
+        topEnd = 0.dp,
+        bottomEnd = 0.dp,
+        bottomStart = 24.dp,
+    )
+    Box(
+        modifier = modifier
+            .width(34.dp)
+            .height(48.dp)
+            .clip(leftHalfCircle)
+            .background(Color(0x66263247))
+            .border(1.dp, Color(0x66FFFFFF), leftHalfCircle)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "+",
+            color = Color.White,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
+private fun MultiMediaPaneOrEmpty(
+    pane: MultiMediaPaneSession?,
+    slot: MultiMediaSlot,
+    onPickMediaSlot: (MultiMediaSlot) -> Unit,
+    onPaneItemChange: (MultiMediaSlot, MediaItem) -> Unit,
+    onSearchAuthor: (String) -> Unit,
+    onPlaybackStateChange: (Long, Boolean, Float) -> Unit,
+    onPlaybackSnapshot: (Long, Boolean, Float) -> Unit,
+    onOpenTemporarySingle: (Long, Boolean, Float) -> Unit,
+    onSelectNewMedia: () -> Unit,
+    onRemove: () -> Unit,
+    videoSegmentsByUri: Map<String, List<VideoSegment>>,
+    modifier: Modifier = Modifier,
+) {
+    pane?.let { selectedPane ->
+        MultiMediaPane(
+            item = selectedPane.item,
+            sourceItems = selectedPane.sourceItems,
+            videoSegments = videoSegmentsByUri[selectedPane.item.uri].orEmpty(),
+            initialPlaybackPositionMillis = selectedPane.playbackPositionMillis,
+            initialPlayWhenReady = selectedPane.playWhenReady,
+            initialScale = selectedPane.scale,
+            onSwitchItem = { onPaneItemChange(slot, it) },
+            onSearchAuthor = onSearchAuthor,
+            onPlaybackStateChange = onPlaybackStateChange,
+            onPlaybackSnapshot = onPlaybackSnapshot,
+            onOpenTemporarySingle = onOpenTemporarySingle,
+            onSelectNewMedia = onSelectNewMedia,
+            onRemove = onRemove,
+            modifier = modifier,
+        )
+    } ?: MultiMediaEmptyPane(
+        onClick = { onPickMediaSlot(slot) },
+        modifier = modifier,
+    )
+}
+
+private enum class MultiMediaSlot {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+private data class MultiMediaSession(
+    val topLeft: MultiMediaPaneSession? = null,
+    val topRight: MultiMediaPaneSession? = null,
+    val bottomLeft: MultiMediaPaneSession? = null,
+    val bottomRight: MultiMediaPaneSession? = null,
+    val topRightExpanded: Boolean = false,
+    val bottomRightExpanded: Boolean = false,
+    val pendingSlot: MultiMediaSlot? = null,
+) {
+    fun pane(slot: MultiMediaSlot): MultiMediaPaneSession? = when (slot) {
+        MultiMediaSlot.TopLeft -> topLeft
+        MultiMediaSlot.TopRight -> topRight
+        MultiMediaSlot.BottomLeft -> bottomLeft
+        MultiMediaSlot.BottomRight -> bottomRight
+    }
+
+    fun withPane(slot: MultiMediaSlot, pane: MultiMediaPaneSession): MultiMediaSession = when (slot) {
+        MultiMediaSlot.TopLeft -> copy(topLeft = pane)
+        MultiMediaSlot.TopRight -> copy(topRight = pane, topRightExpanded = true)
+        MultiMediaSlot.BottomLeft -> copy(bottomLeft = pane)
+        MultiMediaSlot.BottomRight -> copy(bottomRight = pane, bottomRightExpanded = true)
+    }
+
+    fun expandRightSlot(slot: MultiMediaSlot): MultiMediaSession = when (slot) {
+        MultiMediaSlot.TopRight -> copy(topRightExpanded = true)
+        MultiMediaSlot.BottomRight -> copy(bottomRightExpanded = true)
+        else -> this
+    }
+
+    fun withPanePlaybackState(
+        slot: MultiMediaSlot,
+        positionMillis: Long,
+        playWhenReady: Boolean,
+        scale: Float? = null,
+    ): MultiMediaSession = when (slot) {
+        MultiMediaSlot.TopLeft -> topLeft?.let { pane ->
+            copy(topLeft = pane.copy(
+                playbackPositionMillis = positionMillis,
+                playWhenReady = playWhenReady,
+                scale = scale ?: pane.scale,
+            ))
+        }
+        MultiMediaSlot.TopRight -> topRight?.let { pane ->
+            copy(topRight = pane.copy(
+                playbackPositionMillis = positionMillis,
+                playWhenReady = playWhenReady,
+                scale = scale ?: pane.scale,
+            ))
+        }
+        MultiMediaSlot.BottomLeft -> bottomLeft?.let { pane ->
+            copy(bottomLeft = pane.copy(
+                playbackPositionMillis = positionMillis,
+                playWhenReady = playWhenReady,
+                scale = scale ?: pane.scale,
+            ))
+        }
+        MultiMediaSlot.BottomRight -> bottomRight?.let { pane ->
+            copy(bottomRight = pane.copy(
+                playbackPositionMillis = positionMillis,
+                playWhenReady = playWhenReady,
+                scale = scale ?: pane.scale,
+            ))
+        }
+    } ?: this
+
+    fun withPaneScale(slot: MultiMediaSlot, scale: Float): MultiMediaSession = when (slot) {
+        MultiMediaSlot.TopLeft -> topLeft?.let { pane -> copy(topLeft = pane.copy(scale = scale)) }
+        MultiMediaSlot.TopRight -> topRight?.let { pane -> copy(topRight = pane.copy(scale = scale)) }
+        MultiMediaSlot.BottomLeft -> bottomLeft?.let { pane -> copy(bottomLeft = pane.copy(scale = scale)) }
+        MultiMediaSlot.BottomRight -> bottomRight?.let { pane -> copy(bottomRight = pane.copy(scale = scale)) }
+    } ?: this
+
+    fun withPanePlaybackSnapshots(
+        snapshots: Map<MultiMediaSlot, MultiMediaPlaybackSnapshot>,
+    ): MultiMediaSession = snapshots.entries.fold(this) { session, (slot, snapshot) ->
+        session.withPanePlaybackState(
+            slot,
+            snapshot.positionMillis,
+            snapshot.playWhenReady,
+            snapshot.scale,
+        )
+    }
+
+    fun removePane(slot: MultiMediaSlot): MultiMediaSession = when (slot) {
+        MultiMediaSlot.TopLeft -> topRight?.let { pane ->
+            copy(topLeft = pane, topRight = null, topRightExpanded = false)
+        } ?: copy(topLeft = null, topRightExpanded = false)
+        MultiMediaSlot.TopRight -> copy(topRight = null, topRightExpanded = false)
+        MultiMediaSlot.BottomLeft -> bottomRight?.let { pane ->
+            copy(bottomLeft = pane, bottomRight = null, bottomRightExpanded = false)
+        } ?: copy(bottomLeft = null, bottomRightExpanded = false)
+        MultiMediaSlot.BottomRight -> copy(bottomRight = null, bottomRightExpanded = false)
+    }
+
+    fun firstPane(): MultiMediaPaneSession? =
+        listOfNotNull(topLeft, topRight, bottomLeft, bottomRight).firstOrNull()
+
+    fun isEmpty(): Boolean = firstPane() == null
+}
+
+private data class MultiMediaPaneSession(
+    val item: MediaItem,
+    val sourceItems: List<MediaItem>,
+    val playbackPositionMillis: Long = 0L,
+    val playWhenReady: Boolean = true,
+    val scale: Float = 1f,
+)
+
+private data class MultiMediaPlaybackSnapshot(
+    val positionMillis: Long,
+    val playWhenReady: Boolean,
+    val scale: Float,
+)
+
+@Composable
+private fun FloatingMultiMediaWindow(
+    session: MultiMediaSession,
+    onPaneItemChange: (MultiMediaSlot, MediaItem) -> Unit,
+    onOpen: () -> Unit,
+    onClose: () -> Unit,
+) {
+    var dragOffsetX by remember { mutableFloatStateOf(0f) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val maxHorizontalOffset = -(
+            with(density) { maxWidth.toPx() } - with(density) { 220.dp.toPx() + 14.dp.toPx() }
+        ).coerceAtLeast(0f)
+        val maxVerticalOffset = -(
+            with(density) { maxHeight.toPx() } - with(density) { 280.dp.toPx() + 14.dp.toPx() }
+        ).coerceAtLeast(0f)
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 14.dp, bottom = 14.dp)
+                .offset { IntOffset(dragOffsetX.roundToInt(), dragOffsetY.roundToInt()) }
+                .width(220.dp)
+                .height(280.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0xF20A0E14))
+                .border(1.dp, Color(0x66FFFFFF), RoundedCornerShape(12.dp)),
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Text(
+                    if (session.pendingSlot != null) "请从列表选择媒体" else "多视频",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(34.dp)
+                        .padding(start = 10.dp, end = 30.dp, top = 9.dp),
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                FloatingMultiMediaRow(
+                    leftPane = session.topLeft,
+                    rightPane = session.topRight,
+                    isRightExpanded = session.topRightExpanded,
+                    leftSlot = MultiMediaSlot.TopLeft,
+                    rightSlot = MultiMediaSlot.TopRight,
+                    onPaneItemChange = onPaneItemChange,
+                    modifier = Modifier.weight(1f),
+                )
+                Box(Modifier.fillMaxWidth().height(4.dp).background(Color(0x99FFFFFF)))
+                FloatingMultiMediaRow(
+                    leftPane = session.bottomLeft,
+                    rightPane = session.bottomRight,
+                    isRightExpanded = session.bottomRightExpanded,
+                    leftSlot = MultiMediaSlot.BottomLeft,
+                    rightSlot = MultiMediaSlot.BottomRight,
+                    onPaneItemChange = onPaneItemChange,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(maxHorizontalOffset, maxVerticalOffset) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            var wasDragged = false
+                            do {
+                                val event = awaitPointerEvent()
+                                event.changes.forEach { change ->
+                                    if (change.pressed) {
+                                        val delta = change.positionChange()
+                                        if (delta.x != 0f || delta.y != 0f) {
+                                            wasDragged = true
+                                            dragOffsetX = (dragOffsetX + delta.x)
+                                                .coerceIn(maxHorizontalOffset, 0f)
+                                            dragOffsetY = (dragOffsetY + delta.y)
+                                                .coerceIn(maxVerticalOffset, 0f)
+                                            change.consume()
+                                        }
+                                    }
+                                }
+                            } while (event.changes.any { it.pressed })
+                            if (!wasDragged) onOpen()
+                        }
+                    },
+            )
+            Text(
+                "×",
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .size(26.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xAA000000))
+                    .clickable { onClose() }
+                    .padding(bottom = 2.dp),
+                color = Color.White,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FloatingMultiMediaRow(
+    leftPane: MultiMediaPaneSession?,
+    rightPane: MultiMediaPaneSession?,
+    isRightExpanded: Boolean,
+    leftSlot: MultiMediaSlot,
+    rightSlot: MultiMediaSlot,
+    onPaneItemChange: (MultiMediaSlot, MediaItem) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (!isRightExpanded) {
+        FloatingMultiMediaPreview(
+            pane = leftPane,
+            slot = leftSlot,
+            onPaneItemChange = onPaneItemChange,
+            modifier = modifier.fillMaxWidth(),
+        )
+        return
+    }
+    Row(modifier.fillMaxWidth()) {
+        FloatingMultiMediaPreview(
+            pane = leftPane,
+            slot = leftSlot,
+            onPaneItemChange = onPaneItemChange,
+            modifier = Modifier.weight(0.68f),
+        )
+        Box(Modifier.width(3.dp).fillMaxHeight().background(Color(0x99FFFFFF)))
+        FloatingMultiMediaPreview(
+            pane = rightPane,
+            slot = rightSlot,
+            onPaneItemChange = onPaneItemChange,
+            modifier = Modifier.weight(0.32f),
+        )
+    }
+}
+
+@Composable
+private fun FloatingMultiMediaPreview(
+    pane: MultiMediaPaneSession?,
+    slot: MultiMediaSlot,
+    onPaneItemChange: (MultiMediaSlot, MediaItem) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    pane?.let { selectedPane ->
+        MultiMediaPane(
+            item = selectedPane.item,
+            sourceItems = selectedPane.sourceItems,
+            onSwitchItem = { onPaneItemChange(slot, it) },
+            showControls = false,
+            modifier = modifier,
+        )
+    } ?: Box(
+        modifier = modifier.background(Color(0xFF10151E)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("+", color = Color(0xCCFFFFFF), style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+@Composable
+private fun MultiMediaEmptyPane(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color(0xFF0B0F15))
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                "+",
+                color = Color(0xCCFFFFFF),
+                style = MaterialTheme.typography.displaySmall,
+            )
+            Text(
+                "选择媒体",
+                color = Color(0xCCFFFFFF),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+}
+
+@OptIn(UnstableApi::class)
+@Composable
+private fun MultiMediaPane(
+    item: MediaItem,
+    sourceItems: List<MediaItem>,
+    videoSegments: List<VideoSegment> = emptyList(),
+    initialPlaybackPositionMillis: Long = 0L,
+    initialPlayWhenReady: Boolean = true,
+    initialScale: Float = 1f,
+    onSwitchItem: (MediaItem) -> Unit,
+    onSearchAuthor: ((String) -> Unit)? = null,
+    onPlaybackStateChange: ((Long, Boolean, Float) -> Unit)? = null,
+    onPlaybackSnapshot: ((Long, Boolean, Float) -> Unit)? = null,
+    onOpenTemporarySingle: ((Long, Boolean, Float) -> Unit)? = null,
+    onSelectNewMedia: (() -> Unit)? = null,
+    onRemove: (() -> Unit)? = null,
+    showControls: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val toneCurve = LocalToneCurve.current
+    val colorAdjustments = LocalColorAdjustments.current
+    val isToneCurveEditing = LocalToneCurveEditing.current
+    var scale by remember(item.uri) { mutableFloatStateOf(initialScale) }
+    var offsetX by remember(item.uri) { mutableFloatStateOf(0f) }
+    var offsetY by remember(item.uri) { mutableFloatStateOf(0f) }
+    var videoAspectRatio by remember(item.uri) { mutableStateOf(item.displayAspectRatio) }
+    var horizontalSeekBasePosition by remember(item.uri) { mutableStateOf(0L) }
+    var resumeAfterHorizontalSeek by remember(item.uri) { mutableStateOf(false) }
+    var controlsVisible by remember(item.uri) { mutableStateOf(false) }
+    var currentPosition by remember(item.uri) { mutableStateOf(0L) }
+    var duration by remember(item.uri) { mutableStateOf(0L) }
+    var playbackSpeed by remember(item.uri) { mutableFloatStateOf(1f) }
+    var isScrubbing by remember(item.uri) { mutableStateOf(false) }
+    var resumeAfterScrubbing by remember(item.uri) { mutableStateOf(false) }
+    var activeSegment by remember(item.uri) { mutableStateOf<VideoSegment?>(null) }
+    var isMuted by remember(item.uri) { mutableStateOf(false) }
+    var controlsAutoHideToken by remember(item.uri) { mutableStateOf(0) }
+    var suppressNextControlsTap by remember(item.uri) { mutableStateOf(false) }
+    var controlsTapGuardToken by remember(item.uri) { mutableStateOf(0) }
+    val authorId = remember(item.displayName) { item.displayName.substringBefore('_').trim() }
+    val player = if (item.mediaType == MediaType.Video) {
+        remember(item.uri) {
+            ExoPlayer.Builder(context).build().apply {
+                setVideoEffects(buildVideoEffects(toneCurve, colorAdjustments))
+                setMediaItem(fromUri(Uri.parse(item.uri)))
+                videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+                repeatMode = Player.REPEAT_MODE_ONE
+                prepare()
+                seekTo(initialPlaybackPositionMillis.coerceAtLeast(0L))
+                playWhenReady = initialPlayWhenReady
+            }
+        }
+    } else {
+        null
+    }
+    var wasToneCurveEditing by remember(player) { mutableStateOf(false) }
+    PausePlayerWhenAppStops(player)
+
+    if (player != null) {
+        DisposableEffect(player) {
+            val listener = object : Player.Listener {
+                override fun onVideoSizeChanged(videoSize: VideoSize) {
+                    videoAspectRatio = videoSize.displayAspectRatio() ?: item.displayAspectRatio
+                }
+
+                override fun onEvents(player: Player, events: Player.Events) {
+                    duration = player.duration
+                        .takeIf { it > 0L && it != C.TIME_UNSET }
+                        ?: 0L
+                    currentPosition = player.currentPosition.coerceAtLeast(0L)
+                }
+            }
+            player.addListener(listener)
+            onDispose {
+                onPlaybackStateChange?.invoke(
+                    player.currentPosition.coerceAtLeast(0L),
+                    player.playWhenReady,
+                    scale,
+                )
+                player.removeListener(listener)
+                player.release()
+            }
+        }
+    }
+
+    LaunchedEffect(player) {
+        player ?: return@LaunchedEffect
+        while (true) {
+            duration = player.duration
+                .takeIf { it > 0L && it != C.TIME_UNSET }
+                ?: 0L
+            if (!isScrubbing) {
+                currentPosition = player.currentPosition.coerceAtLeast(0L)
+            }
+            onPlaybackSnapshot?.invoke(
+                player.currentPosition.coerceAtLeast(0L),
+                player.playWhenReady,
+                scale,
+            )
+            if (showControls && !isScrubbing) {
+                activeSegment?.let { segment ->
+                    if (player.currentPosition < segment.startMillis ||
+                        player.currentPosition >= segment.endMillis
+                    ) {
+                        player.seekTo(segment.startMillis)
+                        currentPosition = segment.startMillis
+                    }
+                }
+            }
+            delay(250)
+        }
+    }
+
+    LaunchedEffect(activeSegment, player, showControls) {
+        if (!showControls) return@LaunchedEffect
+        activeSegment?.let { segment ->
+            player?.seekTo(segment.startMillis)
+            currentPosition = segment.startMillis
+            player?.play()
+        }
+    }
+
+    LaunchedEffect(videoSegments) {
+        if (activeSegment != null && activeSegment !in videoSegments) {
+            activeSegment = null
+        }
+    }
+
+    LaunchedEffect(player, playbackSpeed) {
+        player?.setPlaybackSpeed(playbackSpeed)
+    }
+
+    LaunchedEffect(player, toneCurve, colorAdjustments, isToneCurveEditing) {
+        player?.let { activePlayer ->
+            if (isToneCurveEditing) {
+                activePlayer.pause()
+            }
+            activePlayer.setVideoEffects(buildVideoEffects(toneCurve, colorAdjustments))
+            if (isToneCurveEditing) {
+                activePlayer.refreshToneCurveVideoFrame()
+            } else if (wasToneCurveEditing) {
+                activePlayer.play()
+            }
+            wasToneCurveEditing = isToneCurveEditing
+        }
+    }
+
+    LaunchedEffect(player, isMuted) {
+        player?.volume = if (isMuted) 0f else 1f
+    }
+
+    LaunchedEffect(controlsAutoHideToken) {
+        if (controlsAutoHideToken == 0) return@LaunchedEffect
+        delay(CONTROLS_AFTER_SCRUB_VISIBLE_MILLIS)
+        controlsVisible = false
+    }
+
+    LaunchedEffect(controlsTapGuardToken) {
+        if (controlsTapGuardToken == 0) return@LaunchedEffect
+        suppressNextControlsTap = true
+        delay(CONTROLS_SCRUB_TAP_GUARD_MILLIS)
+        suppressNextControlsTap = false
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(2.dp))
+            .background(Color.Black)
+            .pointerInput(item.uri) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        if (event.changes.count { it.pressed } >= 2) {
+                            val nextScale = (scale * event.calculateZoom()).coerceIn(0.5f, 3f)
+                            val pan = event.calculatePan()
+                            scale = nextScale
+                            if (nextScale != 1f) {
+                                offsetX += pan.x
+                                offsetY += pan.y
+                            } else {
+                                offsetX = 0f
+                                offsetY = 0f
+                            }
+                            event.changes.filter { it.positionChanged() }.forEach { it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
+                }
+            }
+            .pointerInput(item.uri, player) {
+                detectVideoGestures(
+                    onTap = {
+                        if (player != null) {
+                            if (suppressNextControlsTap) {
+                                suppressNextControlsTap = false
+                                controlsVisible = true
+                            } else {
+                                controlsVisible = !controlsVisible
+                            }
+                        }
+                    },
+                    onDoubleTap = {
+                        player?.let { activePlayer ->
+                            if (activePlayer.playWhenReady) activePlayer.pause() else activePlayer.play()
+                        }
+                    },
+                    onHorizontalSwipeStart = {
+                        player?.let { activePlayer ->
+                            horizontalSeekBasePosition = activePlayer.currentPosition.coerceAtLeast(0L)
+                            resumeAfterHorizontalSeek = activePlayer.playWhenReady
+                            activePlayer.pause()
+                        }
+                    },
+                    onHorizontalSwipe = { seekOffset ->
+                        player?.let { activePlayer ->
+                            val duration = activePlayer.duration
+                                .takeIf { it > 0L && it != C.TIME_UNSET }
+                                ?: return@let
+                            activePlayer.seekTo(
+                                (horizontalSeekBasePosition + seekOffset).coerceIn(0L, duration),
+                            )
+                        }
+                    },
+                    onHorizontalSwipeEnd = {
+                        player?.let { activePlayer ->
+                            if (resumeAfterHorizontalSeek) activePlayer.play()
+                            resumeAfterHorizontalSeek = false
+                        }
+                    },
+                    onVerticalSwipe = { intent ->
+                        val currentIndex = sourceItems.indexOfFirst { it.uri == item.uri }
+                        val targetIndex = when (intent) {
+                            SwipeIntent.Next -> currentIndex + 1
+                            SwipeIntent.Previous -> currentIndex - 1
+                        }
+                        sourceItems.getOrNull(targetIndex)?.let(onSwitchItem)
+                    },
+                    durationMillis = {
+                        player?.duration?.takeIf { it > 0L && it != C.TIME_UNSET } ?: 0L
+                    },
+                )
+            },
+    ) {
+        StableAspectMediaFrame(
+            item = item,
+            scale = scale,
+            offsetX = offsetX,
+            offsetY = offsetY,
+            aspectRatioOverride = videoAspectRatio,
+        ) {
+            if (player != null) {
+                AndroidView(
+                    factory = { viewContext ->
+                            (LayoutInflater.from(viewContext)
+                                .inflate(R.layout.view_video_player, null, false) as PlayerView).apply {
+                            useController = false
+                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            this.player = player
+                        }
+                    },
+                    update = { view ->
+                        view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        view.player = player
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                AsyncImage(
+                    model = mediaImageModel(item),
+                    contentDescription = item.displayName,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                    colorFilter = toneCurve.toImageColorFilter(),
+                )
+            }
+        }
+        if (showControls) {
+            MultiPaneVideoSegmentList(
+                segments = videoSegments,
+                activeSegment = activeSegment,
+                onToggleSegment = { segment ->
+                    activeSegment = if (activeSegment == segment) null else segment
+                },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 48.dp, end = 12.dp),
+            )
+        }
+        if (showControls && (
+                onOpenTemporarySingle != null || onSearchAuthor != null || player != null ||
+                    onSelectNewMedia != null || onRemove != null
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 8.dp, end = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (onOpenTemporarySingle != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Color(0x504AA8FF))
+                            .border(1.dp, Color(0x887CC4FF), RoundedCornerShape(50))
+                            .clickable {
+                                onOpenTemporarySingle.invoke(
+                                    player?.currentPosition?.coerceAtLeast(0L) ?: 0L,
+                                    player?.playWhenReady ?: false,
+                                    scale,
+                                )
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = "临时单视频播放",
+                            modifier = Modifier.size(14.dp),
+                            tint = Color(0xFFD6EAFF),
+                        )
+                    }
+                }
+                if (onSearchAuthor != null && authorId.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Color(0x504D46D8))
+                            .border(1.dp, Color(0x888F89FF), RoundedCornerShape(50))
+                            .clickable { onSearchAuthor(authorId) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Search,
+                            contentDescription = "搜索作者 $authorId",
+                            modifier = Modifier.size(14.dp),
+                            tint = Color(0xFFE1DEFF),
+                        )
+                    }
+                }
+                if (player != null) {
+                    val muteBackground = if (isMuted) Color(0x66432127) else Color(0x5044A870)
+                    val muteBorder = if (isMuted) Color(0x88FF9C9C) else Color(0x8890E0AC)
+                    val muteTint = if (isMuted) Color(0xFFFFD0D0) else Color(0xFFD6FFE3)
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(muteBackground)
+                            .border(1.dp, muteBorder, RoundedCornerShape(50))
+                            .clickable {
+                                isMuted = !isMuted
+                                player.volume = if (isMuted) 0f else 1f
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = if (isMuted) {
+                                Icons.AutoMirrored.Rounded.VolumeOff
+                            } else {
+                                Icons.AutoMirrored.Rounded.VolumeUp
+                            },
+                            contentDescription = if (isMuted) "取消静音" else "静音",
+                            modifier = Modifier.size(14.dp),
+                            tint = muteTint,
+                        )
+                    }
+                }
+                if (onSelectNewMedia != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Color(0x504AA8FF))
+                            .border(1.dp, Color(0x887CC4FF), RoundedCornerShape(50))
+                            .clickable { onSelectNewMedia() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Repeat,
+                            contentDescription = "选择新媒体",
+                            modifier = Modifier.size(14.dp),
+                            tint = Color(0xFFD4E9FF),
+                        )
+                    }
+                }
+                if (onRemove != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Color(0x66F56B6B))
+                            .border(1.dp, Color(0x88FFB0B0), RoundedCornerShape(50))
+                            .clickable { onRemove() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Canvas(Modifier.size(10.dp)) {
+                            val strokeWidth = 1.6.dp.toPx()
+                            drawLine(
+                                color = Color.White,
+                                start = Offset(0f, 0f),
+                                end = Offset(size.width, size.height),
+                                strokeWidth = strokeWidth,
+                                cap = StrokeCap.Round,
+                            )
+                            drawLine(
+                                color = Color.White,
+                                start = Offset(size.width, 0f),
+                                end = Offset(0f, size.height),
+                                strokeWidth = strokeWidth,
+                                cap = StrokeCap.Round,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        AnimatedVisibility(
+            visible = player != null && controlsVisible,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(animationSpec = tween(ViewerUiSpec.VIEWER_TRANSITION_DURATION_MILLIS)) +
+                slideInVertically(animationSpec = tween(ViewerUiSpec.VIEWER_TRANSITION_DURATION_MILLIS)) { it / 2 },
+            exit = fadeOut(animationSpec = tween(ViewerUiSpec.VIEWER_TRANSITION_DURATION_MILLIS)) +
+                slideOutVertically(animationSpec = tween(ViewerUiSpec.VIEWER_TRANSITION_DURATION_MILLIS)) { it / 2 },
+        ) {
+            MultiPaneProgressBar(
+                currentPosition = currentPosition,
+                duration = duration,
+                playbackSpeed = playbackSpeed,
+                onSeek = { position ->
+                    player?.seekTo(position)
+                    currentPosition = position
+                },
+                onScrubStart = {
+                    player?.let { activePlayer ->
+                        resumeAfterScrubbing = activePlayer.playWhenReady
+                        isScrubbing = true
+                        controlsVisible = true
+                        activePlayer.pause()
+                    }
+                },
+                onScrubEnd = {
+                    player?.let { activePlayer ->
+                        isScrubbing = false
+                        if (resumeAfterScrubbing) activePlayer.play() else activePlayer.pause()
+                    }
+                    resumeAfterScrubbing = false
+                    controlsVisible = true
+                    controlsAutoHideToken += 1
+                    controlsTapGuardToken += 1
+                },
+                onPlaybackSpeedChange = { playbackSpeed = it },
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun MultiPaneVideoSegmentList(
+    segments: List<VideoSegment>,
+    activeSegment: VideoSegment?,
+    onToggleSegment: (VideoSegment) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (segments.isEmpty()) return
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        segments.sortedBy { it.startMillis }.forEach { segment ->
+            val isActive = activeSegment == segment
+            Text(
+                text = segment.name?.takeIf { it.isNotBlank() }
+                    ?: "${segment.startMillis.formatDuration()}-${segment.endMillis.formatDuration()}",
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isActive) Color(0xFFE9C55D) else Color(0x99000000))
+                    .border(1.dp, Color(0x88FFFFFF), RoundedCornerShape(8.dp))
+                    .clickable { onToggleSegment(segment) }
+                    .padding(horizontal = 9.dp, vertical = 6.dp),
+                color = if (isActive) Color(0xFF3F2B00) else Color.White,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MultiPaneProgressBar(
+    currentPosition: Long,
+    duration: Long,
+    playbackSpeed: Float,
+    onSeek: (Long) -> Unit,
+    onScrubStart: () -> Unit,
+    onScrubEnd: () -> Unit,
+    onPlaybackSpeedChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val safeDuration = duration.coerceAtLeast(1L)
+    val safePosition = currentPosition.coerceIn(0L, safeDuration)
+    val controlInteractionSource = remember { MutableInteractionSource() }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xB32A2A2A))
+            .clickable(
+                interactionSource = controlInteractionSource,
+                indication = null,
+                onClick = {},
+            )
+            .padding(start = 10.dp, end = 8.dp, top = 3.dp, bottom = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            PlaybackTimeFormatter.formatMillis(safePosition),
+            color = Color.White,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        CompactSeekBar(
+            currentPosition = safePosition,
+            duration = safeDuration,
+            onSeek = onSeek,
+            onScrubStart = onScrubStart,
+            onScrub = onSeek,
+            onScrubEnd = onScrubEnd,
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 8.dp),
+        )
+        Text(
+            PlaybackTimeFormatter.formatMillis(duration),
+            color = Color.White,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        PlaybackSpeedOptions.values.forEach { speed ->
+            val selected = playbackSpeed == speed
+            val speedBackground by animateColorAsState(
+                targetValue = if (selected) Color(0x55FFFFFF) else Color.Transparent,
+                animationSpec = tween(ViewerUiSpec.SELECTION_TRANSITION_DURATION_MILLIS),
+                label = "multi_pane_playback_speed_selection",
+            )
+            Text(
+                "${speed}x",
+                modifier = Modifier
+                    .padding(start = 4.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(speedBackground)
+                    .clickable { onPlaybackSpeedChange(speed) }
+                    .padding(horizontal = 5.dp, vertical = 3.dp),
+                color = Color.White,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            )
+        }
+    }
+}
+
 private const val VideoGestureDoubleTapTimeoutMillis = 280L
+private const val MIN_VIEWER_SCALE = 0.45f
+private const val MAX_VIEWER_SCALE = 5f
+private const val DEFAULT_SINGLE_MEDIA_DISPLAY_SCALE = 0.86f
+private const val CONTROLS_AFTER_SCRUB_VISIBLE_MILLIS = 10_000L
+private const val CONTROLS_SCRUB_TAP_GUARD_MILLIS = 500L
+
+private data class ToneCurve(
+    val blacks: Float = 0f,
+    val shadows: Float = 0.25f,
+    val midtones: Float = 0.5f,
+    val highlights: Float = 0.75f,
+    val whites: Float = 1f,
+) {
+    val pointValues: FloatArray
+        get() = floatArrayOf(blacks, shadows, midtones, highlights, whites)
+
+    val isIdentity: Boolean
+        get() = kotlin.math.abs(blacks) < 0.001f &&
+            kotlin.math.abs(shadows - 0.25f) < 0.001f &&
+            kotlin.math.abs(midtones - 0.5f) < 0.001f &&
+            kotlin.math.abs(highlights - 0.75f) < 0.001f &&
+            kotlin.math.abs(whites - 1f) < 0.001f
+
+    fun withPoint(index: Int, value: Float): ToneCurve = when (index) {
+        0 -> copy(blacks = value.coerceIn(0f, 1f))
+        1 -> copy(shadows = value.coerceIn(0f, 1f))
+        2 -> copy(midtones = value.coerceIn(0f, 1f))
+        3 -> copy(highlights = value.coerceIn(0f, 1f))
+        else -> copy(whites = value.coerceIn(0f, 1f))
+    }
+
+    fun isCloseTo(other: ToneCurve): Boolean {
+        return kotlin.math.abs(blacks - other.blacks) < 0.001f &&
+            kotlin.math.abs(shadows - other.shadows) < 0.001f &&
+            kotlin.math.abs(midtones - other.midtones) < 0.001f &&
+            kotlin.math.abs(highlights - other.highlights) < 0.001f &&
+            kotlin.math.abs(whites - other.whites) < 0.001f
+    }
+
+    fun map(value: Float): Float {
+        val x = value.coerceIn(0f, 1f)
+        val values = pointValues
+        val segment = (0..3).firstOrNull { index -> x <= POINT_X[index + 1] } ?: 3
+        val progress = (x - POINT_X[segment]) / (POINT_X[segment + 1] - POINT_X[segment])
+        return (values[segment] + (values[segment + 1] - values[segment]) * progress)
+            .coerceIn(0f, 1f)
+    }
+
+    @OptIn(UnstableApi::class)
+    fun toVideoEffect(): Effect {
+        val cube = Array(VIDEO_LUT_SIZE) { red ->
+            Array(VIDEO_LUT_SIZE) { green ->
+                IntArray(VIDEO_LUT_SIZE) { blue ->
+                    val r = mapLutNode(red)
+                    val g = mapLutNode(green)
+                    val b = mapLutNode(blue)
+                    android.graphics.Color.rgb(r, g, b)
+                }
+            }
+        }
+        return SingleColorLut.createFromCube(cube)
+    }
+
+    fun toImageColorFilter(): ColorFilter? {
+        if (isIdentity) return null
+        val slope = ((map(0.75f) - map(0.25f)) / 0.5f).coerceIn(0f, 2.5f)
+        val offset = ((map(0.5f) - 0.5f * slope) * 255f).coerceIn(-255f, 255f)
+        return ColorFilter.colorMatrix(
+            ColorMatrix(
+                floatArrayOf(
+                    slope, 0f, 0f, 0f, offset,
+                    0f, slope, 0f, 0f, offset,
+                    0f, 0f, slope, 0f, offset,
+                    0f, 0f, 0f, 1f, 0f,
+                ),
+            ),
+        )
+    }
+
+    private fun mapLutNode(index: Int): Int {
+        return (map(index / (VIDEO_LUT_SIZE - 1f)) * 255f).roundToInt().coerceIn(0, 255)
+    }
+
+    companion object {
+        val POINT_X = floatArrayOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+        private const val VIDEO_LUT_SIZE = 32
+    }
+}
+
+private data class ToneCurvePreset(
+    val id: String,
+    val name: String,
+    val curve: ToneCurve,
+)
+
+private class ToneCurvePresetStore(context: Context) {
+    private val preferences = context.getSharedPreferences("videosee_tone_curve_presets", Context.MODE_PRIVATE)
+
+    fun load(): List<ToneCurvePreset> = runCatching {
+        val array = JSONArray(preferences.getString(PRESETS_KEY, "[]"))
+        buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val id = item.optString("id").trim()
+                val name = item.optString("name").trim()
+                if (id.isBlank() || name.isBlank()) continue
+                add(
+                    ToneCurvePreset(
+                        id = id,
+                        name = name,
+                        curve = ToneCurve(
+                            blacks = item.optDouble("blacks", 0.0).toFloat().coerceIn(0f, 1f),
+                            shadows = item.optDouble("shadows", 0.25).toFloat().coerceIn(0f, 1f),
+                            midtones = item.optDouble("midtones", 0.5).toFloat().coerceIn(0f, 1f),
+                            highlights = item.optDouble("highlights", 0.75).toFloat().coerceIn(0f, 1f),
+                            whites = item.optDouble("whites", 1.0).toFloat().coerceIn(0f, 1f),
+                        ),
+                    ),
+                )
+            }
+        }
+    }.getOrDefault(emptyList())
+
+    fun save(presets: List<ToneCurvePreset>) {
+        val array = JSONArray()
+        presets.forEach { preset ->
+            array.put(
+                JSONObject().apply {
+                    put("id", preset.id)
+                    put("name", preset.name)
+                    put("blacks", preset.curve.blacks)
+                    put("shadows", preset.curve.shadows)
+                    put("midtones", preset.curve.midtones)
+                    put("highlights", preset.curve.highlights)
+                    put("whites", preset.curve.whites)
+                },
+            )
+        }
+        preferences.edit().putString(PRESETS_KEY, array.toString()).apply()
+    }
+
+    fun observe(onChange: () -> Unit): () -> Unit {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == PRESETS_KEY) onChange()
+        }
+        preferences.registerOnSharedPreferenceChangeListener(listener)
+        return { preferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
+    private companion object {
+        const val PRESETS_KEY = "presets"
+    }
+}
+
+private class PlaybackAdjustmentStore(context: Context) {
+    private val preferences = context.getSharedPreferences("videosee_playback_adjustments", Context.MODE_PRIVATE)
+
+    fun loadToneCurve(): ToneCurve = runCatching {
+        ToneCurve(
+            blacks = preferences.getFloat(TONE_BLACKS_KEY, 0f).coerceIn(0f, 1f),
+            shadows = preferences.getFloat(TONE_SHADOWS_KEY, 0.25f).coerceIn(0f, 1f),
+            midtones = preferences.getFloat(TONE_MIDTONES_KEY, 0.5f).coerceIn(0f, 1f),
+            highlights = preferences.getFloat(TONE_HIGHLIGHTS_KEY, 0.75f).coerceIn(0f, 1f),
+            whites = preferences.getFloat(TONE_WHITES_KEY, 1f).coerceIn(0f, 1f),
+        )
+    }.getOrDefault(ToneCurve())
+
+    fun saveToneCurve(toneCurve: ToneCurve) {
+        preferences.edit()
+            .putFloat(TONE_BLACKS_KEY, toneCurve.blacks)
+            .putFloat(TONE_SHADOWS_KEY, toneCurve.shadows)
+            .putFloat(TONE_MIDTONES_KEY, toneCurve.midtones)
+            .putFloat(TONE_HIGHLIGHTS_KEY, toneCurve.highlights)
+            .putFloat(TONE_WHITES_KEY, toneCurve.whites)
+            .apply()
+    }
+
+    fun loadColorAdjustments(): ColorAdjustments = runCatching {
+        ColorAdjustments(
+            sharpness = preferences.getFloat(COLOR_SHARPNESS_KEY, 0f).coerceIn(0f, 1f),
+            contrast = preferences.getFloat(COLOR_CONTRAST_KEY, 0f).coerceIn(-1f, 1f),
+            vibrance = preferences.getFloat(COLOR_VIBRANCE_KEY, 0f).coerceIn(-1f, 1f),
+            redAccent = preferences.getFloat(COLOR_RED_ACCENT_KEY, 0f).coerceIn(-1f, 1f),
+            blueAccent = preferences.getFloat(COLOR_BLUE_ACCENT_KEY, 0f).coerceIn(-1f, 1f),
+            purpleAccent = preferences.getFloat(COLOR_PURPLE_ACCENT_KEY, 0f).coerceIn(-1f, 1f),
+        )
+    }.getOrDefault(ColorAdjustments())
+
+    fun saveColorAdjustments(colorAdjustments: ColorAdjustments) {
+        preferences.edit()
+            .putFloat(COLOR_SHARPNESS_KEY, colorAdjustments.sharpness)
+            .putFloat(COLOR_CONTRAST_KEY, colorAdjustments.contrast)
+            .putFloat(COLOR_VIBRANCE_KEY, colorAdjustments.vibrance)
+            .putFloat(COLOR_RED_ACCENT_KEY, colorAdjustments.redAccent)
+            .putFloat(COLOR_BLUE_ACCENT_KEY, colorAdjustments.blueAccent)
+            .putFloat(COLOR_PURPLE_ACCENT_KEY, colorAdjustments.purpleAccent)
+            .apply()
+    }
+
+    private companion object {
+        const val TONE_BLACKS_KEY = "tone_blacks"
+        const val TONE_SHADOWS_KEY = "tone_shadows"
+        const val TONE_MIDTONES_KEY = "tone_midtones"
+        const val TONE_HIGHLIGHTS_KEY = "tone_highlights"
+        const val TONE_WHITES_KEY = "tone_whites"
+        const val COLOR_SHARPNESS_KEY = "color_sharpness"
+        const val COLOR_CONTRAST_KEY = "color_contrast"
+        const val COLOR_VIBRANCE_KEY = "color_vibrance"
+        const val COLOR_RED_ACCENT_KEY = "color_red_accent"
+        const val COLOR_BLUE_ACCENT_KEY = "color_blue_accent"
+        const val COLOR_PURPLE_ACCENT_KEY = "color_purple_accent"
+    }
+}
+
+private data class ColorAdjustments(
+    val sharpness: Float = 0f,
+    val contrast: Float = 0f,
+    val vibrance: Float = 0f,
+    val redAccent: Float = 0f,
+    val blueAccent: Float = 0f,
+    val purpleAccent: Float = 0f,
+) {
+    val isIdentity: Boolean
+        get() = kotlin.math.abs(sharpness) < 0.001f &&
+            kotlin.math.abs(contrast) < 0.001f &&
+            kotlin.math.abs(vibrance) < 0.001f &&
+            kotlin.math.abs(redAccent) < 0.001f &&
+            kotlin.math.abs(blueAccent) < 0.001f &&
+            kotlin.math.abs(purpleAccent) < 0.001f
+
+    val usesColorLut: Boolean
+        get() = kotlin.math.abs(contrast) >= 0.001f ||
+            kotlin.math.abs(vibrance) >= 0.001f ||
+            kotlin.math.abs(redAccent) >= 0.001f ||
+            kotlin.math.abs(blueAccent) >= 0.001f ||
+            kotlin.math.abs(purpleAccent) >= 0.001f
+
+    fun isCloseTo(other: ColorAdjustments): Boolean {
+        return kotlin.math.abs(sharpness - other.sharpness) < 0.001f &&
+            kotlin.math.abs(contrast - other.contrast) < 0.001f &&
+            kotlin.math.abs(vibrance - other.vibrance) < 0.001f &&
+            kotlin.math.abs(redAccent - other.redAccent) < 0.001f &&
+            kotlin.math.abs(blueAccent - other.blueAccent) < 0.001f &&
+            kotlin.math.abs(purpleAccent - other.purpleAccent) < 0.001f
+    }
+
+    fun toVideoEffects(): List<Effect> = buildList {
+        if (sharpness > 0.001f) {
+            add(SharpnessEffect(sharpness.coerceIn(0f, 1f)))
+        }
+        if (usesColorLut) {
+            add(SingleColorLut.createFromCube(createColorAdjustmentCube()))
+        }
+    }
+
+    private fun createColorAdjustmentCube(): Array<Array<IntArray>> {
+        return Array(COLOR_LUT_SIZE) { red ->
+            Array(COLOR_LUT_SIZE) { green ->
+                IntArray(COLOR_LUT_SIZE) { blue ->
+                    mapColor(
+                        red / (COLOR_LUT_SIZE - 1f),
+                        green / (COLOR_LUT_SIZE - 1f),
+                        blue / (COLOR_LUT_SIZE - 1f),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun mapColor(red: Float, green: Float, blue: Float): Int {
+        val contrastScale = 1f + contrast.coerceIn(-1f, 1f) * 0.65f
+        val adjustedRed = ((red - 0.5f) * contrastScale + 0.5f).coerceIn(0f, 1f)
+        val adjustedGreen = ((green - 0.5f) * contrastScale + 0.5f).coerceIn(0f, 1f)
+        val adjustedBlue = ((blue - 0.5f) * contrastScale + 0.5f).coerceIn(0f, 1f)
+        val hsv = FloatArray(3)
+        android.graphics.Color.RGBToHSV(
+            (adjustedRed * 255f).roundToInt().coerceIn(0, 255),
+            (adjustedGreen * 255f).roundToInt().coerceIn(0, 255),
+            (adjustedBlue * 255f).roundToInt().coerceIn(0, 255),
+            hsv,
+        )
+        applyVibrance(hsv, vibrance.coerceIn(-1f, 1f))
+        applyHueAccent(hsv, targetHue = 0f, widthDegrees = 42f, amount = redAccent.coerceIn(-1f, 1f))
+        applyHueAccent(hsv, targetHue = 220f, widthDegrees = 48f, amount = blueAccent.coerceIn(-1f, 1f))
+        applyHueAccent(hsv, targetHue = 285f, widthDegrees = 44f, amount = purpleAccent.coerceIn(-1f, 1f))
+        return android.graphics.Color.HSVToColor(hsv)
+    }
+
+    private companion object {
+        const val COLOR_LUT_SIZE = 32
+    }
+}
+
+private class SharpnessEffect(
+    private val amount: Float,
+) : SeparableConvolution() {
+    override fun getConvolution(presentationTimeUs: Long): ConvolutionFunction1D {
+        val strength = amount.coerceIn(0f, 1f) * 0.28f
+        return object : ConvolutionFunction1D {
+            override fun domainStart(): Float = -1f
+            override fun domainEnd(): Float = 1f
+            override fun value(samplePosition: Float): Float {
+                val distance = kotlin.math.abs(samplePosition)
+                return when {
+                    distance < 0.5f -> 1f + 2f * strength
+                    distance <= 1f -> -strength
+                    else -> 0f
+                }
+            }
+        }
+    }
+}
+
+private fun applyVibrance(hsv: FloatArray, amount: Float) {
+    if (kotlin.math.abs(amount) < 0.001f) return
+    val saturation = hsv[1]
+    hsv[1] = if (amount > 0f) {
+        (saturation + (1f - saturation) * amount * (1f - saturation) * 0.9f).coerceIn(0f, 1f)
+    } else {
+        (saturation * (1f + amount * 0.75f)).coerceIn(0f, 1f)
+    }
+}
+
+private fun applyHueAccent(
+    hsv: FloatArray,
+    targetHue: Float,
+    widthDegrees: Float,
+    amount: Float,
+) {
+    if (kotlin.math.abs(amount) < 0.001f || hsv[1] < 0.04f) return
+    val proximity = (1f - circularHueDistance(hsv[0], targetHue) / widthDegrees)
+        .coerceIn(0f, 1f) * hsv[1]
+    if (proximity <= 0f) return
+    if (amount > 0f) {
+        hsv[0] = shiftHueToward(hsv[0], targetHue, amount * proximity * 0.2f)
+        hsv[1] = (hsv[1] + (1f - hsv[1]) * amount * proximity * 0.95f).coerceIn(0f, 1f)
+        hsv[2] = (hsv[2] * (1f + amount * proximity * 0.08f)).coerceIn(0f, 1f)
+    } else {
+        val fade = -amount
+        hsv[1] = (hsv[1] * (1f - fade * proximity * 0.72f)).coerceIn(0f, 1f)
+        hsv[2] = (hsv[2] + (1f - hsv[2]) * fade * proximity * 0.12f).coerceIn(0f, 1f)
+    }
+}
+
+private fun circularHueDistance(hue: Float, targetHue: Float): Float {
+    val delta = kotlin.math.abs(hue - targetHue)
+    return kotlin.math.min(delta, 360f - delta)
+}
+
+private fun shiftHueToward(hue: Float, targetHue: Float, fraction: Float): Float {
+    val delta = ((targetHue - hue + 540f) % 360f) - 180f
+    return (hue + delta * fraction + 360f) % 360f
+}
+
+private data class ColorAdjustmentPreset(
+    val id: String,
+    val name: String,
+    val adjustments: ColorAdjustments,
+)
+
+private class ColorAdjustmentPresetStore(context: Context) {
+    private val preferences = context.getSharedPreferences("videosee_color_adjustment_presets", Context.MODE_PRIVATE)
+
+    fun load(): List<ColorAdjustmentPreset> = runCatching {
+        val array = JSONArray(preferences.getString(PRESETS_KEY, "[]"))
+        buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val id = item.optString("id").trim()
+                val name = item.optString("name").trim()
+                if (id.isBlank() || name.isBlank()) continue
+                add(
+                    ColorAdjustmentPreset(
+                        id = id,
+                        name = name,
+                        adjustments = ColorAdjustments(
+                            sharpness = item.optDouble("sharpness", 0.0).toFloat().coerceIn(0f, 1f),
+                            contrast = item.optDouble("contrast", 0.0).toFloat().coerceIn(-1f, 1f),
+                            vibrance = item.optDouble("vibrance", 0.0).toFloat().coerceIn(-1f, 1f),
+                            redAccent = item.optDouble("redAccent", 0.0).toFloat().coerceIn(-1f, 1f),
+                            blueAccent = item.optDouble("blueAccent", 0.0).toFloat().coerceIn(-1f, 1f),
+                            purpleAccent = item.optDouble("purpleAccent", 0.0).toFloat().coerceIn(-1f, 1f),
+                        ),
+                    ),
+                )
+            }
+        }
+    }.getOrDefault(emptyList())
+
+    fun save(presets: List<ColorAdjustmentPreset>) {
+        val array = JSONArray()
+        presets.forEach { preset ->
+            array.put(
+                JSONObject().apply {
+                    put("id", preset.id)
+                    put("name", preset.name)
+                    put("sharpness", preset.adjustments.sharpness)
+                    put("contrast", preset.adjustments.contrast)
+                    put("vibrance", preset.adjustments.vibrance)
+                    put("redAccent", preset.adjustments.redAccent)
+                    put("blueAccent", preset.adjustments.blueAccent)
+                    put("purpleAccent", preset.adjustments.purpleAccent)
+                },
+            )
+        }
+        preferences.edit().putString(PRESETS_KEY, array.toString()).apply()
+    }
+
+    fun observe(onChange: () -> Unit): () -> Unit {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == PRESETS_KEY) onChange()
+        }
+        preferences.registerOnSharedPreferenceChangeListener(listener)
+        return { preferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
+    private companion object {
+        const val PRESETS_KEY = "presets"
+    }
+}
+
+private val LocalToneCurve = staticCompositionLocalOf { ToneCurve() }
+private val LocalColorAdjustments = staticCompositionLocalOf { ColorAdjustments() }
+private val LocalToneCurveEditing = staticCompositionLocalOf { false }
+
+@Composable
+private fun PausePlayerWhenAppStops(
+    player: Player?,
+    onPaused: () -> Unit = {},
+) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val latestOnPaused by rememberUpdatedState(onPaused)
+
+    DisposableEffect(player, lifecycleOwner) {
+        if (player == null) {
+            return@DisposableEffect onDispose {}
+        }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                player.pause()
+                latestOnPaused()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+}
+
+private fun buildVideoEffects(toneCurve: ToneCurve, colorAdjustments: ColorAdjustments): MutableList<Effect> {
+    return mutableListOf<Effect>(toneCurve.toVideoEffect()).apply {
+        addAll(colorAdjustments.toVideoEffects())
+    }
+}
+
+private fun Player.refreshToneCurveVideoFrame() {
+    val position = currentPosition.coerceAtLeast(0L)
+    val durationMillis = duration.takeIf { it > 0L && it != C.TIME_UNSET }
+    val target = when {
+        durationMillis == null -> position + 1L
+        position < durationMillis - 1L -> position + 1L
+        else -> (position - 1L).coerceAtLeast(0L)
+    }
+    seekTo(target)
+}
 
 @Composable
 private fun MediaSurface(
@@ -2077,6 +5936,18 @@ private fun MediaSurface(
     offsetY: Float,
     activeVideo: Boolean,
     onSetMediaFavoriteLevel: (String, Int) -> Unit,
+    playbackMode: PlaybackMode,
+    onTogglePlaybackMode: () -> Unit,
+    videoSegments: List<VideoSegment>,
+    onAddVideoSegment: (Long, Long) -> Unit,
+    onDeleteVideoSegment: (VideoSegment) -> Unit,
+    onRenameVideoSegment: (VideoSegment, String) -> Unit,
+    onOpenAuthorSearch: (String) -> Unit,
+    isInDefaultFavoriteFolder: Boolean,
+    onToggleDefaultFavoriteFolder: () -> Unit,
+    initialPlaybackPositionMillis: Long = 0L,
+    initialPlayWhenReady: Boolean = true,
+    onPlaybackStateChange: ((Long, Boolean) -> Unit)? = null,
 ) {
     when {
         item.mediaType == MediaType.Video && activeVideo -> VideoPlayer(
@@ -2085,6 +5956,18 @@ private fun MediaSurface(
             offsetX = offsetX,
             offsetY = offsetY,
             onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
+            playbackMode = playbackMode,
+            onTogglePlaybackMode = onTogglePlaybackMode,
+            videoSegments = videoSegments,
+            onAddVideoSegment = onAddVideoSegment,
+            onDeleteVideoSegment = onDeleteVideoSegment,
+            onRenameVideoSegment = onRenameVideoSegment,
+            onOpenAuthorSearch = onOpenAuthorSearch,
+            isInDefaultFavoriteFolder = isInDefaultFavoriteFolder,
+            onToggleDefaultFavoriteFolder = onToggleDefaultFavoriteFolder,
+            initialPlaybackPositionMillis = initialPlaybackPositionMillis,
+            initialPlayWhenReady = initialPlayWhenReady,
+            onPlaybackStateChange = onPlaybackStateChange,
         )
 
         else -> StableAspectMediaFrame(
@@ -2098,6 +5981,7 @@ private fun MediaSurface(
                 contentDescription = item.displayName,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Fit,
+                colorFilter = LocalToneCurve.current.toImageColorFilter(),
             )
         }
     }
@@ -2158,6 +6042,7 @@ private fun videoFrameImageModel(item: MediaItem?): Any? {
         .build()
 }
 
+@OptIn(UnstableApi::class)
 @Composable
 private fun VideoPlayer(
     item: MediaItem,
@@ -2165,36 +6050,98 @@ private fun VideoPlayer(
     offsetX: Float,
     offsetY: Float,
     onSetMediaFavoriteLevel: (String, Int) -> Unit,
+    playbackMode: PlaybackMode,
+    onTogglePlaybackMode: () -> Unit,
+    videoSegments: List<VideoSegment>,
+    onAddVideoSegment: (Long, Long) -> Unit,
+    onDeleteVideoSegment: (VideoSegment) -> Unit,
+    onRenameVideoSegment: (VideoSegment, String) -> Unit,
+    onOpenAuthorSearch: (String) -> Unit,
+    isInDefaultFavoriteFolder: Boolean,
+    onToggleDefaultFavoriteFolder: () -> Unit,
+    initialPlaybackPositionMillis: Long = 0L,
+    initialPlayWhenReady: Boolean = true,
+    onPlaybackStateChange: ((Long, Boolean) -> Unit)? = null,
 ) {
     val context = LocalContext.current
+    val toneCurve = LocalToneCurve.current
+    val colorAdjustments = LocalColorAdjustments.current
+    val isToneCurveEditing = LocalToneCurveEditing.current
+    val currentItem by rememberUpdatedState(item)
+    val currentPlaybackStateChange by rememberUpdatedState(onPlaybackStateChange)
     val coroutineScope = rememberCoroutineScope()
     var isPaused by remember(item.uri) { mutableStateOf(false) }
-    var playerView by remember(item.uri) { mutableStateOf<PlayerView?>(null) }
-    var currentPosition by remember(item.uri) { mutableStateOf(0L) }
+    var playerView by remember { mutableStateOf<PlayerView?>(null) }
+    var currentPosition by remember(item.uri) {
+        mutableStateOf(initialPlaybackPositionMillis.coerceAtLeast(0L))
+    }
     var duration by remember(item.uri) { mutableStateOf(0L) }
     var controlsVisible by remember(item.uri) { mutableStateOf(ViewerUiSpec.CONTROLS_VISIBLE_BY_DEFAULT) }
     var playbackSpeed by remember(item.uri) { mutableFloatStateOf(1f) }
     var seekFeedbackText by remember(item.uri) { mutableStateOf<String?>(null) }
+    var seekFeedbackDisplayText by remember(item.uri) { mutableStateOf("") }
+    var horizontalSeekOffset by remember(item.uri) { mutableStateOf<Long?>(null) }
     var isSavingSnapshot by remember(item.uri) { mutableStateOf(false) }
-    var videoAspectRatio by remember(item.uri) { mutableStateOf(item.displayAspectRatio) }
-    val player = remember(item.uri) {
+    var decodedVideoAspectRatio by remember { mutableStateOf(item.displayAspectRatio) }
+    var playerFrameAspectRatio by remember { mutableStateOf(item.displayAspectRatio) }
+    var renderedVideoUri by remember { mutableStateOf(item.uri) }
+    var segmentStartMillis by remember(item.uri) { mutableStateOf<Long?>(null) }
+    var activeSegment by remember(item.uri) { mutableStateOf<VideoSegment?>(null) }
+    var isScrubbing by remember(item.uri) { mutableStateOf(false) }
+    var resumeAfterScrubbing by remember(item.uri) { mutableStateOf(false) }
+    var horizontalSeekBasePosition by remember(item.uri) { mutableStateOf(0L) }
+    var resumeAfterHorizontalSeek by remember(item.uri) { mutableStateOf(false) }
+    var controlsAutoHideToken by remember(item.uri) { mutableStateOf(0) }
+    var suppressNextControlsTap by remember(item.uri) { mutableStateOf(false) }
+    var controlsTapGuardToken by remember(item.uri) { mutableStateOf(0) }
+    // Keep one decoder and one TextureView for the whole viewer session. Recreating either
+    // on every vertical swipe leaves the screen without a frame until the next video decodes.
+    val player = remember {
         ExoPlayer.Builder(context).build().apply {
-            setMediaItem(fromUri(Uri.parse(item.uri)))
+            setVideoEffects(buildVideoEffects(toneCurve, colorAdjustments))
             videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
             repeatMode = Player.REPEAT_MODE_ONE
-            prepare()
-            playWhenReady = true
         }
+    }
+    var wasToneCurveEditing by remember(player) { mutableStateOf(false) }
+    PausePlayerWhenAppStops(player) {
+        isPaused = true
+    }
+
+    LaunchedEffect(item.uri) {
+        decodedVideoAspectRatio = item.displayAspectRatio
+        playerFrameAspectRatio = item.displayAspectRatio
+        renderedVideoUri = ""
+    }
+
+    LaunchedEffect(player, item.uri, initialPlaybackPositionMillis, initialPlayWhenReady) {
+        player.stop()
+        player.clearMediaItems()
+        player.setVideoEffects(buildVideoEffects(toneCurve, colorAdjustments))
+        player.setMediaItem(fromUri(Uri.parse(item.uri)))
+        player.prepare()
+        player.seekTo(initialPlaybackPositionMillis.coerceAtLeast(0L))
+        player.playWhenReady = initialPlayWhenReady
+        isPaused = !initialPlayWhenReady
     }
 
     DisposableEffect(player, playerView) {
         val listener = object : Player.Listener {
             override fun onVideoSizeChanged(videoSize: VideoSize) {
-                videoAspectRatio = videoSize.displayAspectRatio() ?: item.displayAspectRatio
+                val aspectRatio = videoSize.displayAspectRatio() ?: currentItem.displayAspectRatio
+                decodedVideoAspectRatio = aspectRatio
+                if (renderedVideoUri == currentItem.uri) {
+                    playerFrameAspectRatio = aspectRatio
+                }
                 player.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
                 playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                 playerView?.requestLayout()
                 playerView?.invalidate()
+            }
+
+            override fun onRenderedFirstFrame() {
+                renderedVideoUri = currentItem.uri
+                playerFrameAspectRatio = decodedVideoAspectRatio
             }
 
             override fun onEvents(player: Player, events: Player.Events) {
@@ -2210,16 +6157,72 @@ private fun VideoPlayer(
         while (true) {
             duration = player.duration.takeIf { it > 0 && it != C.TIME_UNSET } ?: 0L
             currentPosition = player.currentPosition.coerceAtLeast(0L)
+            currentPlaybackStateChange?.invoke(currentPosition, player.playWhenReady)
+            activeSegment?.takeIf { !isScrubbing }?.let { segment ->
+                if (player.currentPosition < segment.startMillis || player.currentPosition >= segment.endMillis) {
+                    player.seekTo(segment.startMillis)
+                    currentPosition = segment.startMillis
+                }
+            }
             delay(250)
         }
     }
 
+    LaunchedEffect(activeSegment, player) {
+        activeSegment?.let { segment ->
+            player.seekTo(segment.startMillis)
+            currentPosition = segment.startMillis
+            player.playWhenReady = true
+            isPaused = false
+        }
+    }
+
+    LaunchedEffect(videoSegments) {
+        if (activeSegment != null && activeSegment !in videoSegments) {
+            activeSegment = null
+        }
+    }
+
     DisposableEffect(player) {
-        onDispose { player.release() }
+        onDispose {
+            currentPlaybackStateChange?.invoke(
+                player.currentPosition.coerceAtLeast(0L),
+                player.playWhenReady,
+            )
+            player.release()
+        }
     }
 
     LaunchedEffect(player, playbackSpeed) {
         player.setPlaybackSpeed(playbackSpeed)
+    }
+
+    LaunchedEffect(player, toneCurve, colorAdjustments, isToneCurveEditing) {
+        if (isToneCurveEditing) {
+            player.pause()
+            isPaused = true
+        }
+        player.setVideoEffects(buildVideoEffects(toneCurve, colorAdjustments))
+        if (isToneCurveEditing) {
+            player.refreshToneCurveVideoFrame()
+        } else if (wasToneCurveEditing) {
+            player.play()
+            isPaused = false
+        }
+        wasToneCurveEditing = isToneCurveEditing
+    }
+
+    LaunchedEffect(controlsAutoHideToken) {
+        if (controlsAutoHideToken == 0) return@LaunchedEffect
+        delay(CONTROLS_AFTER_SCRUB_VISIBLE_MILLIS)
+        controlsVisible = false
+    }
+
+    LaunchedEffect(controlsTapGuardToken) {
+        if (controlsTapGuardToken == 0) return@LaunchedEffect
+        suppressNextControlsTap = true
+        delay(CONTROLS_SCRUB_TAP_GUARD_MILLIS)
+        suppressNextControlsTap = false
     }
 
     LaunchedEffect(seekFeedbackText) {
@@ -2235,39 +6238,42 @@ private fun VideoPlayer(
             scale = scale,
             offsetX = offsetX,
             offsetY = offsetY,
-            aspectRatioOverride = videoAspectRatio,
+            aspectRatioOverride = playerFrameAspectRatio,
         ) {
             Box(Modifier.fillMaxSize()) {
                 AsyncImage(
-                    model = mediaImageModel(item),
+                    // A decoded poster frame covers the initial load as well as devices where
+                    // a TextureView has not retained a frame yet.
+                    model = videoFrameImageModel(item),
                     contentDescription = item.displayName,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Fit,
                 )
 
-                key(item.uri) {
-                    AndroidView(
-                        factory = { viewContext ->
-                            (LayoutInflater.from(viewContext)
-                                .inflate(R.layout.view_video_player, null, false) as PlayerView).apply {
-                                useController = false
-                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                                setEnableComposeSurfaceSyncWorkaround(true)
-                                this.player = player
-                                playerView = this
-                            }
-                        },
-                        update = {
-                            player.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
-                            it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                            it.setEnableComposeSurfaceSyncWorkaround(true)
-                            it.player = player
-                            it.requestLayout()
-                            it.invalidate()
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
+                AndroidView(
+                    factory = { viewContext ->
+                        (LayoutInflater.from(viewContext)
+                            .inflate(R.layout.view_video_player, null, false) as PlayerView).apply {
+                            useController = false
+                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            setKeepContentOnPlayerReset(true)
+                            setEnableComposeSurfaceSyncWorkaround(true)
+                            this.player = player
+                            playerView = this
+                        }
+                    },
+                    update = {
+                        player.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+                        it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        it.setKeepContentOnPlayerReset(true)
+                        it.setEnableComposeSurfaceSyncWorkaround(true)
+                        it.player = player
+                        it.requestLayout()
+                        it.invalidate()
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+
             }
         }
 
@@ -2276,19 +6282,45 @@ private fun VideoPlayer(
                 .fillMaxSize()
                 .pointerInput(item.uri) {
                     detectVideoGestures(
-                        onTap = { controlsVisible = !controlsVisible },
+                    onTap = {
+                        if (suppressNextControlsTap) {
+                            suppressNextControlsTap = false
+                            controlsVisible = true
+                        } else {
+                            controlsVisible = !controlsVisible
+                        }
+                    },
                         onDoubleTap = {
                             player.playWhenReady = !player.playWhenReady
                             isPaused = !player.playWhenReady
                             controlsVisible = true
                         },
+                        onHorizontalSwipeStart = {
+                            horizontalSeekBasePosition = player.currentPosition.coerceAtLeast(0L)
+                            resumeAfterHorizontalSeek = player.playWhenReady
+                            horizontalSeekOffset = null
+                            player.pause()
+                        },
                         onHorizontalSwipe = { seekOffset ->
-                            val targetPosition = (player.currentPosition + seekOffset)
+                            val targetPosition = (horizontalSeekBasePosition + seekOffset)
                                 .coerceIn(0L, duration.coerceAtLeast(0L))
                             player.seekTo(targetPosition)
                             currentPosition = targetPosition
-                            seekFeedbackText = VideoSeekGesture.feedbackText(seekOffset)
+                            horizontalSeekOffset = seekOffset
+                            VideoSeekGesture.feedbackText(seekOffset).also { feedback ->
+                                seekFeedbackText = feedback
+                                seekFeedbackDisplayText = feedback
+                            }
                         },
+                        onHorizontalSwipeEnd = {
+                            if (resumeAfterHorizontalSeek) {
+                                player.play()
+                                isPaused = false
+                            }
+                            resumeAfterHorizontalSeek = false
+                        },
+                        onVerticalSwipe = {},
+                        durationMillis = { duration },
                     )
                 },
         )
@@ -2329,6 +6361,48 @@ private fun VideoPlayer(
                 .align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = actionBottomAnchor - 64.dp),
         )
+        DefaultFavoriteFolderButton(
+            isFavorite = isInDefaultFavoriteFolder,
+            onClick = onToggleDefaultFavoriteFolder,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = actionBottomAnchor - 140.dp),
+        )
+        SegmentMarkerButton(
+            isSettingEnd = segmentStartMillis != null,
+            onClick = {
+                controlsVisible = true
+                val start = segmentStartMillis
+                if (start == null) {
+                    segmentStartMillis = player.currentPosition.coerceAtLeast(0L)
+                } else {
+                    val end = player.currentPosition.coerceAtLeast(0L)
+                    if (end > start) {
+                        onAddVideoSegment(start, end)
+                        segmentStartMillis = null
+                    } else {
+                        horizontalSeekOffset = null
+                        seekFeedbackText = "结束时间需晚于起点"
+                        seekFeedbackDisplayText = seekFeedbackText.orEmpty()
+                    }
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = actionBottomAnchor - 220.dp),
+        )
+        VideoSegmentList(
+            segments = videoSegments,
+            activeSegment = activeSegment,
+            onToggleSegment = { segment ->
+                activeSegment = if (activeSegment == segment) null else segment
+            },
+            onDeleteSegment = onDeleteVideoSegment,
+            onRenameSegment = onRenameVideoSegment,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 68.dp, end = 16.dp),
+        )
 
         AnimatedVisibility(
             visible = isPaused,
@@ -2351,7 +6425,15 @@ private fun VideoPlayer(
 
         AnimatedVisibility(
             visible = seekFeedbackText != null,
-            modifier = Modifier.align(Alignment.Center),
+            modifier = when {
+                horizontalSeekOffset != null && horizontalSeekOffset!! < 0L -> Modifier
+                    .align(Alignment.Center)
+                    .offset(x = (-160).dp)
+                horizontalSeekOffset != null -> Modifier
+                    .align(Alignment.Center)
+                    .offset(x = 160.dp)
+                else -> Modifier.align(Alignment.Center)
+            },
             enter = fadeIn(animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS)) +
                 scaleIn(
                     animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS),
@@ -2363,15 +6445,28 @@ private fun VideoPlayer(
                     targetScale = 0.92f,
                 ),
         ) {
-            Text(
-                seekFeedbackText.orEmpty(),
-                modifier = Modifier
-                    .background(Color(0xAA000000), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 18.dp, vertical = 10.dp),
-                color = Color.White,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
+            if (horizontalSeekOffset != null) {
+                val direction = if (horizontalSeekOffset!! < 0L) "<<<" else ">>>"
+                Text(
+                    text = "$direction  $seekFeedbackDisplayText",
+                    modifier = Modifier
+                        .background(Color(0xAA000000), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            } else {
+                Text(
+                    seekFeedbackDisplayText,
+                    modifier = Modifier
+                        .background(Color(0xAA000000), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
         }
 
         AnimatedVisibility(
@@ -2387,13 +6482,35 @@ private fun VideoPlayer(
                 currentPosition = currentPosition,
                 duration = duration,
                 playbackSpeed = playbackSpeed,
+                playbackMode = playbackMode,
+                onOpenAuthorSearch = onOpenAuthorSearch,
                 onSeek = { position ->
                     player.seekTo(position)
                     currentPosition = position
                 },
+                onScrubStart = {
+                    resumeAfterScrubbing = player.playWhenReady
+                    isScrubbing = true
+                    controlsVisible = true
+                    player.pause()
+                },
+                onScrubEnd = {
+                    isScrubbing = false
+                    if (resumeAfterScrubbing) {
+                        player.play()
+                        isPaused = false
+                    } else {
+                        player.pause()
+                    }
+                    resumeAfterScrubbing = false
+                    controlsVisible = true
+                    controlsAutoHideToken += 1
+                    controlsTapGuardToken += 1
+                },
                 onPlaybackSpeedChange = { speed ->
                     playbackSpeed = speed
                 },
+                onTogglePlaybackMode = onTogglePlaybackMode,
             )
         }
     }
@@ -2416,6 +6533,134 @@ private fun SnapshotButton(
                 style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.SemiBold,
     )
+}
+
+@Composable
+private fun SegmentMarkerButton(
+    isSettingEnd: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        text = if (isSettingEnd) "设置 B" else "设置 A",
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0x99000000))
+            .border(1.dp, Color(0x99FFFFFF), RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 13.dp, vertical = 9.dp),
+        color = Color.White,
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.SemiBold,
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun VideoSegmentList(
+    segments: List<VideoSegment>,
+    activeSegment: VideoSegment?,
+    onToggleSegment: (VideoSegment) -> Unit,
+    onDeleteSegment: (VideoSegment) -> Unit,
+    onRenameSegment: (VideoSegment, String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (segments.isEmpty()) return
+    var editingSegment by remember { mutableStateOf<VideoSegment?>(null) }
+    var editingName by remember { mutableStateOf("") }
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        segments.sortedBy { it.startMillis }.forEach { segment ->
+            var showDelete by remember(segment) { mutableStateOf(false) }
+            Box {
+                Text(
+                    text = segment.name?.takeIf { it.isNotBlank() }
+                        ?: "${segment.startMillis.formatDuration()}-${segment.endMillis.formatDuration()}",
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (activeSegment == segment) Color(0xFFE9C55D) else Color(0x99000000),
+                        )
+                        .border(1.dp, Color(0x66FFFFFF), RoundedCornerShape(10.dp))
+                        .combinedClickable(
+                            onClick = { onToggleSegment(segment) },
+                            onLongClick = { showDelete = true },
+                        )
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    color = if (activeSegment == segment) Color(0xFF3F2B00) else Color.White,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (showDelete) {
+                    Icon(
+                        imageVector = Icons.Rounded.Edit,
+                        contentDescription = "编辑精彩片段名称",
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .offset(x = (-7).dp, y = (-7).dp)
+                            .size(18.dp)
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(Color(0xFF2867B2))
+                            .clickable {
+                                editingSegment = segment
+                                editingName = segment.name.orEmpty()
+                                showDelete = false
+                            }
+                            .padding(3.dp),
+                        tint = Color.White,
+                    )
+                    Text(
+                        text = "×",
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(x = 7.dp, y = (-7).dp)
+                            .size(18.dp)
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(Color(0xFFD93025))
+                            .clickable {
+                                onDeleteSegment(segment)
+                                showDelete = false
+                            },
+                        color = Color.White,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
+    }
+    editingSegment?.let { segment ->
+        AlertDialog(
+            onDismissRequest = { editingSegment = null },
+            title = { Text("编辑精彩片段名称") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("留空时将显示时间范围")
+                    TextField(
+                        value = editingName,
+                        onValueChange = { editingName = it.take(40) },
+                        singleLine = true,
+                        label = { Text("片段名称") },
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onRenameSegment(segment, editingName)
+                        editingSegment = null
+                    },
+                ) { Text("保存") }
+            },
+            dismissButton = {
+                Button(onClick = { editingSegment = null }) { Text("取消") }
+            },
+        )
+    }
 }
 
 private suspend fun saveVideoSnapshot(
@@ -2479,13 +6724,19 @@ private fun saveBitmapToMediaStore(
 private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectVideoGestures(
     onTap: () -> Unit,
     onDoubleTap: () -> Unit,
+    onHorizontalSwipeStart: () -> Unit,
     onHorizontalSwipe: (Long) -> Unit,
+    onHorizontalSwipeEnd: () -> Unit,
+    onVerticalSwipe: (SwipeIntent) -> Unit,
+    durationMillis: () -> Long,
 ) {
     awaitEachGesture {
         val firstDown = awaitFirstDown(requireUnconsumed = false)
         var totalDragX = 0f
         var totalDragY = 0f
         var moved = false
+        var horizontalSwipeStarted = false
+        var lastSeekOffset: Long? = null
 
         do {
             val event = awaitPointerEvent()
@@ -2500,17 +6751,29 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectVi
                     if (positionChange.x != 0f || positionChange.y != 0f) {
                         moved = true
                     }
+                    val seekOffset = if (kotlin.math.abs(totalDragX) > kotlin.math.abs(totalDragY)) {
+                        VideoSeekGesture.seekOffsetMillis(
+                            totalDragX = totalDragX,
+                            viewportWidthPx = size.width.toFloat(),
+                            durationMillis = durationMillis(),
+                        )
+                    } else {
+                        null
+                    }
+                    if (seekOffset != null && seekOffset != lastSeekOffset) {
+                        if (!horizontalSwipeStarted) {
+                            horizontalSwipeStarted = true
+                            onHorizontalSwipeStart()
+                        }
+                        onHorizontalSwipe(seekOffset)
+                        lastSeekOffset = seekOffset
+                    }
                 }
             }
         } while (event.changes.any { it.pressed })
 
-        val seekOffset = if (kotlin.math.abs(totalDragX) > kotlin.math.abs(totalDragY)) {
-            VideoSeekGesture.seekOffsetMillis(totalDragX)
-        } else {
-            null
-        }
         when {
-            seekOffset != null -> onHorizontalSwipe(seekOffset)
+            horizontalSwipeStarted -> onHorizontalSwipeEnd()
             !moved -> {
                 val secondDown = withTimeoutOrNull(VideoGestureDoubleTapTimeoutMillis) {
                     awaitFirstDown(requireUnconsumed = false)
@@ -2524,6 +6787,7 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectVi
                     onDoubleTap()
                 }
             }
+            else -> SwipeIntent.fromVerticalDrag(totalDragY)?.let(onVerticalSwipe)
         }
 
         firstDown.consume()
@@ -2536,11 +6800,15 @@ private fun VideoProgressBar(
     currentPosition: Long,
     duration: Long,
     playbackSpeed: Float,
+    playbackMode: PlaybackMode,
+    onOpenAuthorSearch: (String) -> Unit,
     onSeek: (Long) -> Unit,
+    onScrubStart: () -> Unit,
+    onScrubEnd: () -> Unit,
     onPlaybackSpeedChange: (Float) -> Unit,
+    onTogglePlaybackMode: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
     var showInfo by remember(displayName) { mutableStateOf(false) }
     val safeDuration = duration.coerceAtLeast(1L)
     val safePosition = currentPosition.coerceIn(0L, safeDuration)
@@ -2555,16 +6823,11 @@ private fun VideoProgressBar(
             exit = fadeOut(animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS)) +
                 slideOutVertically(animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS)) { it / 2 },
         ) {
-            Text(
-                displayName,
+            FilenameInfoBubble(
+                displayName = displayName,
+                onOpenAuthorSearch = onOpenAuthorSearch,
                 modifier = Modifier
                     .padding(start = 32.dp, end = 32.dp, bottom = 54.dp)
-                    .background(Color(0x99000000), RoundedCornerShape(6.dp))
-                    .clickable { context.copyTextToClipboard("filename", displayName) }
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = Color.White,
             )
         }
 
@@ -2583,6 +6846,21 @@ private fun VideoProgressBar(
                 .padding(start = 14.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (playbackMode == PlaybackMode.Shuffle) Color(0x44FFFFFF) else Color.Transparent)
+                    .clickable { onTogglePlaybackMode() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = if (playbackMode == PlaybackMode.Shuffle) Icons.Rounded.Shuffle else Icons.Rounded.Repeat,
+                    contentDescription = if (playbackMode == PlaybackMode.Shuffle) "随机播放" else "顺序播放",
+                    modifier = Modifier.size(18.dp),
+                    tint = Color.White,
+                )
+            }
             Text(
                 PlaybackTimeFormatter.formatMillis(safePosition),
                 color = Color.White,
@@ -2592,6 +6870,9 @@ private fun VideoProgressBar(
                 currentPosition = safePosition,
                 duration = safeDuration,
                 onSeek = onSeek,
+                onScrubStart = onScrubStart,
+                onScrub = onSeek,
+                onScrubEnd = onScrubEnd,
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 10.dp),
@@ -2640,6 +6921,9 @@ private fun CompactSeekBar(
     currentPosition: Long,
     duration: Long,
     onSeek: (Long) -> Unit,
+    onScrubStart: () -> Unit,
+    onScrub: (Long) -> Unit,
+    onScrubEnd: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -2649,12 +6933,12 @@ private fun CompactSeekBar(
     } else {
         0f
     }.coerceIn(0f, 1f)
-    val thumbHalfPx = with(density) { 4.dp.toPx() }
+    val thumbHalfPx = with(density) { 5.dp.toPx() }
 
-    fun seekFromX(x: Float) {
-        if (widthPx <= 0) return
+    fun positionFromX(x: Float): Long? {
+        if (widthPx <= 0) return null
         val fraction = (x / widthPx).coerceIn(0f, 1f)
-        onSeek((duration * fraction).toLong())
+        return (duration * fraction).toLong()
     }
 
     Box(
@@ -2664,18 +6948,20 @@ private fun CompactSeekBar(
             .pointerInput(duration, widthPx) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    seekFromX(down.position.x)
+                    onScrubStart()
+                    positionFromX(down.position.x)?.let(onScrub)
                     down.consume()
 
                     do {
                         val event = awaitPointerEvent()
                         event.changes.forEach { change ->
                             if (change.pressed) {
-                                seekFromX(change.position.x)
+                                positionFromX(change.position.x)?.let(onScrub)
                                 change.consume()
                             }
                         }
                     } while (event.changes.any { it.pressed })
+                    onScrubEnd()
                 }
             },
         contentAlignment = Alignment.CenterStart,
@@ -2683,15 +6969,15 @@ private fun CompactSeekBar(
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(3.dp)
-                .clip(RoundedCornerShape(2.dp))
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp))
                 .background(Color(0x66FFFFFF)),
         )
         Box(
             Modifier
                 .fillMaxWidth(progress)
-                .height(3.dp)
-                .clip(RoundedCornerShape(2.dp))
+                .height(6.dp)
+                .clip(RoundedCornerShape(3.dp))
                 .background(Color.White),
         )
         Box(
@@ -2702,19 +6988,20 @@ private fun CompactSeekBar(
                         y = 0,
                     )
                 }
-                .size(8.dp)
-                .clip(RoundedCornerShape(4.dp))
+                .size(10.dp)
+                .clip(RoundedCornerShape(5.dp))
                 .background(Color.White),
         )
     }
 }
 
+
 @Composable
 private fun InfoButton(
     displayName: String,
+    onOpenAuthorSearch: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
     var showInfo by remember(displayName) { mutableStateOf(false) }
     Box(modifier = modifier.padding(16.dp)) {
         AnimatedVisibility(
@@ -2725,16 +7012,11 @@ private fun InfoButton(
             exit = fadeOut(animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS)) +
                 slideOutVertically(animationSpec = tween(ViewerUiSpec.OVERLAY_TRANSITION_DURATION_MILLIS)) { it / 2 },
         ) {
-            Text(
-                displayName,
+            FilenameInfoBubble(
+                displayName = displayName,
+                onOpenAuthorSearch = onOpenAuthorSearch,
                 modifier = Modifier
                     .padding(bottom = 42.dp)
-                    .background(Color(0x99000000), RoundedCornerShape(6.dp))
-                    .clickable { context.copyTextToClipboard("filename", displayName) }
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = Color.White,
             )
         }
         Text(
@@ -2747,6 +7029,47 @@ private fun InfoButton(
                 .padding(horizontal = 12.dp, vertical = 7.dp),
             color = Color.White,
             fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
+private fun FilenameInfoBubble(
+    displayName: String,
+    onOpenAuthorSearch: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val authorId = displayName.substringBefore('_').trim()
+    Row(
+        modifier = modifier
+            .background(Color(0x99000000), RoundedCornerShape(6.dp))
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(enabled = authorId.isNotBlank()) { onOpenAuthorSearch(authorId) },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = "搜索作者 $authorId",
+                modifier = Modifier.size(18.dp),
+                tint = Color.White,
+            )
+        }
+        Text(
+            displayName,
+            modifier = Modifier
+                .widthIn(max = 520.dp)
+                .clickable { context.copyTextToClipboard("filename", displayName) }
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            color = Color.White,
         )
     }
 }

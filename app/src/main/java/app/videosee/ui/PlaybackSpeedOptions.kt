@@ -1,5 +1,5 @@
 package app.videosee.ui
 
 object PlaybackSpeedOptions {
-    val values = listOf(0.25f, 0.5f, 0.75f, 0.9f)
+    val values = listOf(0.7f, 0.9f, 1.2f, 1.5f)
 }

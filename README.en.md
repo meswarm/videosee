@@ -12,23 +12,25 @@ VideoSee is an Android-only local photo and video browser built with Kotlin, Jet
 ## Features
 
 - Browse local images and videos by folder, author, or tag collection.
-- Uses a near-black deep purple theme instead of a pure black interface.
+- Includes six remembered themes: Midnight, Graphite, Forest, Snow, Mist, and Sand.
 - Author collections recognize filenames like `{author_id}_{timestamp}_{media_id}` with at least two underscores, then group media by `author_id`.
 - Tag collections support multi-select intersection filtering. For example, selecting both `Scenery` and `Family` shows only media that has both tags.
 - Search the current left-side collection by name: folder names in Folder mode, author names in Author mode, and tag names in Tag mode.
 - Rate authors and individual media with 1 to 3 hearts; unrated items show gray outlined hearts.
+- Create and rename favorite folders, choose a default folder, and toggle the current fullscreen media into it.
 - Sort author collections by name, count, newest modified time, or heart level, in ascending or descending order.
 - Sort media by name, newest modified time, or heart level, in ascending or descending order.
 - Open the Data Backup page from the top-left toolbar to export/import heart and tag data together as JSON.
 - Use the floating fast scroller on the media grid to jump through large collections quickly.
 - Video thumbnails are cached in the app cache directory and reused after they are generated, reducing repeated thumbnail work and battery drain.
 - Long-press a media card to enter multi-select delete mode, then delete selected media from the current collection.
-- Open any image or video in fullscreen; fullscreen heart controls stay synchronized with the grid.
+- Open any image or video in fullscreen with recent-play history, sequential/shuffle playback, and two- or four-pane viewing.
 - Toggle tags for the current fullscreen media from the left-side tag rail; tag state stays synchronized with the grid.
 - Fullscreen button areas avoid taking over tiny touch movements too early, reducing missed immediate taps on tags or hearts.
 - Swipe up or down in fullscreen to move to the previous or next item. At the first or last item, the first extra swipe shows a boundary hint, and a second swipe in the same direction wraps to the other end.
-- For videos, double-tap anywhere on the fullscreen surface to play or pause, and swipe left/right anywhere to seek backward/forward by 5 seconds.
-- Video controls include a seek bar, current/total time, and fixed playback speeds: `0.25x`, `0.5x`, `0.75x`, and `0.9x`.
+- For videos, double-tap anywhere on the fullscreen surface to play or pause, and swipe left/right by distance to seek quickly.
+- Video controls include a seek bar, current/total time, fixed playback speeds (`0.7x`, `0.9x`, `1.2x`, `1.5x`), and named video segments.
+- Fullscreen viewing includes tone-curve and brightness/contrast-style color controls with saved presets.
 - Capture the current video frame to `Pictures/VideoSee`.
 - Tap the fullscreen filename label to copy the filename.
 - Delete the current fullscreen media from the right-side delete button. Android still shows the system media-delete authorization sheet, and after confirmation VideoSee opens the next item.
@@ -109,7 +111,7 @@ Heart ratings and tag data are stored locally in app `SharedPreferences`:
 
 - Ratings and tags are lost if the app is uninstalled, app data is cleared, or a differently signed APK is installed without first exporting JSON.
 - Reinstalling over the app with the same signing key usually preserves local data.
-- The exported JSON contains author hearts, media hearts, tag names, and media-to-tag mappings. Keep a recent copy as your manual backup.
+- The exported JSON contains author hearts, media hearts, tag names, media-to-tag mappings, favorite folders, and video segments. Keep a recent copy as your manual backup.
 - Importing JSON replaces the current heart and tag data with the backup content.
 
 ## Privacy And Security
