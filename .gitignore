@@ -19,6 +19,9 @@ app/build/
 !.env.example
 *.log
 
+# Local media samples/imports
+Movies/
+
 # OS/editor noise
 .DS_Store
 

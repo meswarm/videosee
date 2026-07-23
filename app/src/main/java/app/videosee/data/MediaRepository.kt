@@ -2,6 +2,7 @@ package app.videosee.data
 
 import android.content.ContentUris
 import android.content.Context
+import android.os.Build
 import android.provider.MediaStore
 import app.videosee.domain.MediaFolder
 import app.videosee.domain.MediaItem
@@ -81,6 +82,7 @@ class MediaRepository(private val context: Context) {
             MediaStore.Video.Media.DURATION,
             MediaStore.Video.Media.WIDTH,
             MediaStore.Video.Media.HEIGHT,
+            MediaStore.Video.Media.RELATIVE_PATH,
         )
 
         return context.contentResolver.query(
@@ -98,15 +100,29 @@ class MediaRepository(private val context: Context) {
             val durationColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
             val widthColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.WIDTH)
             val heightColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.HEIGHT)
+            val relativePathColumn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                cursor.getColumnIndex(MediaStore.Video.Media.RELATIVE_PATH)
+            } else {
+                -1
+            }
 
             buildList {
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idColumn)
+                    val displayName = cursor.getString(nameColumn).orEmpty()
+                    val relativePath = if (relativePathColumn >= 0) {
+                        cursor.getString(relativePathColumn).orEmpty()
+                    } else {
+                        ""
+                    }
+                    if (displayName.isHlsSidecarMediaName() || relativePath.isLikelyHlsSidecarDirectory()) {
+                        continue
+                    }
                     add(
                         MediaItem(
                             id = id,
                             uri = ContentUris.withAppendedId(collection, id).toString(),
-                            displayName = cursor.getString(nameColumn).orEmpty(),
+                            displayName = displayName,
                             bucketId = cursor.getString(bucketIdColumn).orEmpty(),
                             bucketName = cursor.getString(bucketNameColumn).orEmpty(),
                             mediaType = MediaType.Video,
@@ -120,6 +136,16 @@ class MediaRepository(private val context: Context) {
             }
         } ?: emptyList()
     }
+}
+
+private fun String.isHlsSidecarMediaName(): Boolean {
+    val normalized = lowercase()
+    return normalized.endsWith(".ts") || normalized.endsWith(".m3u8")
+}
+
+private fun String.isLikelyHlsSidecarDirectory(): Boolean {
+    val normalized = replace('\\', '/').lowercase()
+    return normalized.contains("/share91/") || normalized.contains("/tsconvert/")
 }
 
 data class MediaLibrary(

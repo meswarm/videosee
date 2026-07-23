@@ -39,6 +39,8 @@ VideoSee is an Android-only local photo and video browser built with Kotlin, Jet
 - Delete the current fullscreen media from the right-side delete button. Android still shows the system media-delete authorization sheet, and after confirmation VideoSee opens the next item.
 - Open the Download page from the left toolbar, configure server IP, port, token, and device ID, then refresh pending files, download one file, or download all.
 - Downloaded images are saved to `Pictures/VideoSee`, videos to `Movies/VideoSee`, and other files to `Download/VideoSee`.
+- The Settings page includes `ts视频转换` for scanning the displayed fixed `share91` import directory, converting local `.m3u8`, `.ts` segments, and `tsKey` files to MP4, then publishing them to the system media library.
+- TS conversion skips previously downloaded records, ignores remote playlists, reports missing keys or segments, and supports single convert/download or batch convert-and-download.
 
 ## Requirements
 
@@ -108,6 +110,16 @@ SYNC_MDNS_NAME=videosee-sync
 
 The Android app currently uses cleartext HTTP on the local network and enables `usesCleartextTraffic` in `AndroidManifest.xml`. Use this only on trusted LANs and do not expose the download service to the public internet.
 
+## TS Video Conversion
+
+The `ts视频转换` page in Settings handles HLS segment folders that already exist on the phone. The app shows a fixed import directory and uses a `share91` folder under the app's private external directory by default. Put each video's local `.m3u8`, `.ts` segments, and optional `tsKey` into a same-name folder, then tap Scan to discover convertible videos.
+
+- Remote `.m3u8` files are treated as outer playlists and ignored. If a same-name child directory contains a local playlist, the local playlist is parsed instead.
+- AES-128 keys must be local 16-byte files. Missing keys, missing segments, or playlists without local segments are shown as scan diagnostics.
+- Convert first writes an MP4 into the app cache. Download publishes the MP4 to the system media library, defaulting to `Movies/VideoSee`.
+- Convert And Download All processes the list in batch and shows the success/failure summary in the top banner.
+- The repository-root `Movies/` directory is for local samples or temporary imports only. It is ignored by `.gitignore`; do not commit personal media or HLS segments.
+
 ## Heart And Tag Data Backup
 
 Heart ratings and tag data are stored locally in app `SharedPreferences`:
@@ -121,8 +133,9 @@ Heart ratings and tag data are stored locally in app `SharedPreferences`:
 
 - The app reads the system image/video media library and deletes media through Android's system authorization flow.
 - Screenshots and downloaded files are written to public MediaStore directories.
+- TS conversion reads the displayed local import directory and writes completed MP4 files to the system media library.
 - The download token is stored in local app preferences. Do not use a public or reused sensitive token.
-- Do not commit real tokens, personal media, debug APKs, signing keys, `local.properties`, Gradle caches, build outputs, or temporary icon source files.
+- Do not commit real tokens, personal media, HLS segments, debug APKs, signing keys, `local.properties`, Gradle caches, build outputs, or temporary icon source files.
 
 ## Development
 

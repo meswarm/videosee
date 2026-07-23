@@ -7,6 +7,11 @@ import androidx.lifecycle.viewModelScope
 import app.videosee.data.MediaRepository
 import app.videosee.data.MobileSyncRepository
 import app.videosee.data.SyncPendingFile
+import app.videosee.data.TsConvertRepository
+import app.videosee.data.TsConvertSettingsStore
+import app.videosee.data.TsScanIssue
+import app.videosee.data.TsSourcePathStatus
+import app.videosee.data.TsVideoCandidate
 import app.videosee.data.VideoThumbnailCacheRepository
 import app.videosee.domain.CollectionSearch
 import app.videosee.domain.CollectionSortField
@@ -83,6 +88,25 @@ data class VideoSeeUiState(
     val syncDownloadingIds: Set<String> = emptySet(),
     val syncIsLoading: Boolean = false,
     val syncMessage: String? = null,
+    val tsSourcePaths: List<String> = emptyList(),
+    val tsNewSourcePath: String = "",
+    val tsDownloadDirectory: String = TsConvertSettingsStore.DEFAULT_DOWNLOAD_DIRECTORY,
+    val tsPrivateImportDirectory: String = "",
+    val tsPathStatuses: List<TsSourcePathStatus> = emptyList(),
+    val tsScanIssues: List<TsScanIssue> = emptyList(),
+    val tsVideos: List<TsVideoCandidate> = emptyList(),
+    val tsConvertingIds: Set<String> = emptySet(),
+    val tsDownloadingIds: Set<String> = emptySet(),
+    val tsConvertedOutputPaths: Map<String, String> = emptyMap(),
+    val tsIsScanning: Boolean = false,
+    val tsMessage: String? = null,
+    val tsDownloadedCount: Int = 0,
+    val tsBatchIsRunning: Boolean = false,
+    val tsBatchTotal: Int = 0,
+    val tsBatchCompleted: Int = 0,
+    val tsBatchCurrentName: String = "",
+    val tsBatchFailedCount: Int = 0,
+    val appBannerMessage: String? = null,
     val videoThumbnailPaths: Map<String, String> = emptyMap(),
 ) {
     val selectedFolder: MediaFolder?
@@ -242,6 +266,7 @@ enum class RightPaneMode {
     Settings,
     Tags,
     Sync,
+    TsConvert,
     Backup,
 }
 
@@ -258,8 +283,10 @@ enum class AppTheme(val label: String, val isDark: Boolean) {
 class VideoSeeViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = MediaRepository(application)
     private val syncRepository = MobileSyncRepository(application)
+    private val tsConvertRepository = TsConvertRepository(application)
     private val thumbnailCacheRepository = VideoThumbnailCacheRepository(application)
     private val syncSettingsStore = SyncSettingsStore(application)
+    private val tsConvertSettingsStore = TsConvertSettingsStore(application)
     private val appearanceStore = AppearanceStore(application)
     private val authorFavoriteStore = FavoriteLevelStore(application, "author_favorite_levels")
     private val mediaFavoriteStore = FavoriteLevelStore(application, "media_favorite_levels")
@@ -269,6 +296,7 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
     private val recentPlaybackStore = RecentPlaybackStore(application)
     private val videoSegmentStore = VideoSegmentStore(application)
     private var shuffleResetJob: Job? = null
+    private var tsBatchJob: Job? = null
     private val thumbnailRequestsInFlight = mutableSetOf<String>()
     private val _uiState = MutableStateFlow(
         VideoSeeUiState(
@@ -286,6 +314,10 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
             syncPort = syncSettingsStore.port,
             syncToken = syncSettingsStore.token,
             syncDeviceId = syncSettingsStore.deviceId,
+            tsSourcePaths = tsConvertSettingsStore.sourcePaths,
+            tsDownloadDirectory = tsConvertSettingsStore.downloadDirectory,
+            tsPrivateImportDirectory = tsConvertRepository.privateImportDirectory().absolutePath,
+            tsDownloadedCount = tsConvertSettingsStore.downloadedRecords().size,
         ),
     )
     val uiState: StateFlow<VideoSeeUiState> = _uiState.asStateFlow()
@@ -810,6 +842,10 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(rightPaneMode = RightPaneMode.Sync, viewerIndex = null) }
     }
 
+    fun openTsConvertPane() {
+        _uiState.update { it.copy(rightPaneMode = RightPaneMode.TsConvert, viewerIndex = null) }
+    }
+
     fun openSettingsPane() {
         _uiState.update { it.copy(rightPaneMode = RightPaneMode.Settings, viewerIndex = null) }
     }
@@ -845,6 +881,275 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
     fun updateSyncDeviceId(deviceId: String) {
         syncSettingsStore.deviceId = deviceId
         _uiState.update { it.copy(syncDeviceId = deviceId) }
+    }
+
+    fun updateTsDownloadDirectory(path: String) {
+        tsConvertSettingsStore.downloadDirectory = path
+        _uiState.update { it.copy(tsDownloadDirectory = path) }
+    }
+
+    fun updateTsNewSourcePath(path: String) {
+        _uiState.update { it.copy(tsNewSourcePath = path) }
+    }
+
+    fun addTsSourcePath() {
+        val path = _uiState.value.tsNewSourcePath.trim()
+        if (path.isBlank()) {
+            _uiState.update { it.copy(tsMessage = "请先填写源路径") }
+            return
+        }
+        val nextPaths = (_uiState.value.tsSourcePaths + path).distinct()
+        tsConvertSettingsStore.sourcePaths = nextPaths
+        _uiState.update {
+            it.copy(
+                tsSourcePaths = nextPaths,
+                tsNewSourcePath = "",
+                tsMessage = null,
+            )
+        }
+    }
+
+    fun addTsSourceTreeUri(uri: String) {
+        val nextPaths = (_uiState.value.tsSourcePaths + uri).distinct()
+        tsConvertSettingsStore.sourcePaths = nextPaths
+        _uiState.update {
+            it.copy(
+                tsSourcePaths = nextPaths,
+                tsNewSourcePath = "",
+                tsMessage = "已添加授权文件夹",
+            )
+        }
+    }
+
+    fun removeTsSourcePath(path: String) {
+        val nextPaths = _uiState.value.tsSourcePaths.filterNot { it == path }
+        tsConvertSettingsStore.sourcePaths = nextPaths
+        _uiState.update {
+            it.copy(
+                tsSourcePaths = nextPaths,
+                tsPathStatuses = it.tsPathStatuses.filterNot { status -> status.path == path },
+            )
+        }
+    }
+
+    fun scanTsVideos() {
+        val sourcePaths = listOf(tsConvertRepository.privateImportDirectory().absolutePath)
+        viewModelScope.launch {
+            _uiState.update { it.copy(tsIsScanning = true, tsMessage = null) }
+            runCatching {
+                tsConvertRepository.scan(
+                    sourcePaths = sourcePaths,
+                    downloadedKeys = tsConvertSettingsStore.downloadedKeys(),
+                )
+            }.onSuccess { result ->
+                _uiState.update {
+                    it.copy(
+                        tsIsScanning = false,
+                        tsPathStatuses = result.paths,
+                        tsScanIssues = result.issues,
+                        tsVideos = result.videos,
+                        tsMessage = if (result.videos.isEmpty()) {
+                            if (result.issues.isEmpty()) "没有新的视频待转换和下载" else "没有可转换视频，下面列出了跳过原因"
+                        } else {
+                            "有 ${result.videos.size} 个新的视频待转换和下载"
+                        },
+                    )
+                }
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        tsIsScanning = false,
+                        tsMessage = error.localizedMessage ?: "扫描失败",
+                    )
+                }
+            }
+        }
+    }
+
+    fun convertTsVideo(video: TsVideoCandidate) {
+        val state = _uiState.value
+        if (video.id in state.tsConvertingIds || video.id in state.tsConvertedOutputPaths) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(tsConvertingIds = it.tsConvertingIds + video.id, tsMessage = "开始转换: ${video.outputFileName}") }
+            runCatching { tsConvertRepository.convert(video) }
+                .onSuccess { outputFile ->
+                    _uiState.update {
+                        it.copy(
+                            tsConvertingIds = it.tsConvertingIds - video.id,
+                            tsConvertedOutputPaths = it.tsConvertedOutputPaths + (video.id to outputFile.absolutePath),
+                            tsMessage = "已转换: ${video.outputFileName}",
+                        )
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            tsConvertingIds = it.tsConvertingIds - video.id,
+                            tsMessage = "${video.outputFileName} 转换失败: ${error.localizedMessage ?: "Media3 不支持该清单"}",
+                        )
+                    }
+                }
+        }
+    }
+
+    fun downloadTsVideo(video: TsVideoCandidate) {
+        val state = _uiState.value
+        val outputPath = state.tsConvertedOutputPaths[video.id]
+        if (video.id in state.tsDownloadingIds) return
+        if (outputPath == null) {
+            _uiState.update { it.copy(tsMessage = "请先转换: ${video.outputFileName}") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(tsDownloadingIds = it.tsDownloadingIds + video.id, tsMessage = "开始下载: ${video.outputFileName}") }
+            runCatching {
+                tsConvertRepository.publishConverted(
+                    video = video,
+                    sourceFile = java.io.File(outputPath),
+                    downloadDirectory = state.tsDownloadDirectory,
+                )
+            }.onSuccess { uri ->
+                tsConvertSettingsStore.markDownloaded(video, uri)
+                _uiState.update {
+                    it.copy(
+                        tsDownloadingIds = it.tsDownloadingIds - video.id,
+                        tsVideos = it.tsVideos.filterNot { candidate -> candidate.id == video.id },
+                        tsConvertedOutputPaths = it.tsConvertedOutputPaths - video.id,
+                        tsDownloadedCount = tsConvertSettingsStore.downloadedRecords().size,
+                        tsMessage = "已下载: ${video.outputFileName}",
+                    )
+                }
+                refresh()
+            }.onFailure { error ->
+                _uiState.update {
+                    it.copy(
+                        tsDownloadingIds = it.tsDownloadingIds - video.id,
+                        tsMessage = "${video.outputFileName} 下载失败: ${error.localizedMessage}",
+                    )
+                }
+            }
+        }
+    }
+
+    fun convertAndDownloadAllTsVideos() {
+        val state = _uiState.value
+        if (state.tsBatchIsRunning || tsBatchJob?.isActive == true) return
+        val videos = state.tsVideos.filterNot { video ->
+            video.id in state.tsConvertingIds || video.id in state.tsDownloadingIds
+        }
+        if (videos.isEmpty()) {
+            _uiState.update { it.copy(tsMessage = "没有待转换视频") }
+            return
+        }
+        val downloadDirectory = state.tsDownloadDirectory
+        tsBatchJob = viewModelScope.launch {
+            var completed = 0
+            var succeeded = 0
+            var failed = 0
+            val batchIds = videos.map { it.id }.toSet()
+            _uiState.update {
+                it.copy(
+                    tsBatchIsRunning = true,
+                    tsBatchTotal = videos.size,
+                    tsBatchCompleted = 0,
+                    tsBatchCurrentName = videos.first().outputFileName,
+                    tsBatchFailedCount = 0,
+                    tsMessage = "开始批量转换下载，共 ${videos.size} 个视频",
+                )
+            }
+            for ((index, video) in videos.withIndex()) {
+                _uiState.update {
+                    it.copy(
+                        tsBatchCurrentName = video.outputFileName,
+                        tsMessage = "正在处理 ${index + 1}/${videos.size}: ${video.outputFileName}",
+                    )
+                }
+                val outputFile = runCatching {
+                    val existingPath = _uiState.value.tsConvertedOutputPaths[video.id]
+                    if (existingPath != null && java.io.File(existingPath).isFile) {
+                        java.io.File(existingPath)
+                    } else {
+                        _uiState.update { it.copy(tsConvertingIds = it.tsConvertingIds + video.id) }
+                        tsConvertRepository.convert(video)
+                    }
+                }.onFailure { error ->
+                    failed += 1
+                    completed += 1
+                    _uiState.update {
+                        it.copy(
+                            tsConvertingIds = it.tsConvertingIds - video.id,
+                            tsBatchCompleted = completed,
+                            tsBatchFailedCount = failed,
+                            tsMessage = "${video.outputFileName} 转换失败: ${error.localizedMessage ?: "Media3 不支持该清单"}",
+                        )
+                    }
+                }.getOrNull()
+                _uiState.update { it.copy(tsConvertingIds = it.tsConvertingIds - video.id) }
+                if (outputFile == null) continue
+
+                _uiState.update {
+                    it.copy(
+                        tsConvertedOutputPaths = it.tsConvertedOutputPaths + (video.id to outputFile.absolutePath),
+                        tsDownloadingIds = it.tsDownloadingIds + video.id,
+                        tsMessage = "正在下载 ${index + 1}/${videos.size}: ${video.outputFileName}",
+                    )
+                }
+                runCatching {
+                    tsConvertRepository.publishConverted(
+                        video = video,
+                        sourceFile = outputFile,
+                        downloadDirectory = downloadDirectory,
+                    )
+                }.onSuccess { uri ->
+                    tsConvertSettingsStore.markDownloaded(video, uri)
+                    succeeded += 1
+                    completed += 1
+                    _uiState.update {
+                        it.copy(
+                            tsDownloadingIds = it.tsDownloadingIds - video.id,
+                            tsVideos = it.tsVideos.filterNot { candidate -> candidate.id == video.id },
+                            tsConvertedOutputPaths = it.tsConvertedOutputPaths - video.id,
+                            tsBatchCompleted = completed,
+                            tsDownloadedCount = tsConvertSettingsStore.downloadedRecords().size,
+                            tsMessage = "已下载 ${completed}/${videos.size}: ${video.outputFileName}",
+                        )
+                    }
+                }.onFailure { error ->
+                    failed += 1
+                    completed += 1
+                    _uiState.update {
+                        it.copy(
+                            tsDownloadingIds = it.tsDownloadingIds - video.id,
+                            tsBatchCompleted = completed,
+                            tsBatchFailedCount = failed,
+                            tsMessage = "${video.outputFileName} 下载失败: ${error.localizedMessage}",
+                        )
+                    }
+                }
+            }
+            val doneMessage = if (failed == 0) {
+                "ts视频转换下载完成，共转换下载 $succeeded 个"
+            } else {
+                "ts视频批量处理完成，成功 $succeeded 个，失败 $failed 个"
+            }
+            _uiState.update {
+                it.copy(
+                    tsBatchIsRunning = false,
+                    tsBatchCompleted = completed,
+                    tsBatchCurrentName = "",
+                    tsBatchFailedCount = failed,
+                    tsConvertingIds = it.tsConvertingIds - batchIds,
+                    tsDownloadingIds = it.tsDownloadingIds - batchIds,
+                    tsMessage = doneMessage,
+                    appBannerMessage = doneMessage,
+                )
+            }
+            if (succeeded > 0) refresh()
+        }
+    }
+
+    fun clearAppBannerMessage() {
+        _uiState.update { it.copy(appBannerMessage = null) }
     }
 
     fun loadSyncPendingFiles() {

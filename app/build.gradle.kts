@@ -12,8 +12,8 @@ android {
         applicationId = "app.videosee"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "1.1.2"
+        versionCode = 9
+        versionName = "1.1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -63,8 +63,11 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.documentfile:documentfile:1.1.0")
     implementation("androidx.media3:media3-exoplayer:1.9.2")
+    implementation("androidx.media3:media3-exoplayer-hls:1.9.2")
     implementation("androidx.media3:media3-effect:1.9.2")
+    implementation("androidx.media3:media3-transformer:1.9.2")
     implementation("androidx.media3:media3-ui:1.9.2")
     implementation("io.coil-kt.coil3:coil-compose:3.1.0")
     implementation("io.coil-kt.coil3:coil-video:3.1.0")

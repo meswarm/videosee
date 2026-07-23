@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
@@ -179,6 +180,9 @@ import app.videosee.domain.CollectionSortField
 import app.videosee.domain.MediaSortField
 import app.videosee.domain.SortDirection
 import app.videosee.data.SyncPendingFile
+import app.videosee.data.TsScanIssue
+import app.videosee.data.TsSourcePathStatus
+import app.videosee.data.TsVideoCandidate
 import app.videosee.ui.PlaybackSpeedOptions
 import app.videosee.ui.GridReturnFocus
 import app.videosee.ui.PlaybackTimeFormatter
@@ -340,12 +344,30 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
             }
         }
     }
+    val tsSourceTreeLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }
+        viewModel.addTsSourceTreeUri(uri.toString())
+    }
 
     LaunchedEffect(Unit) {
         if (context.hasMediaPermission()) {
             viewModel.onPermissionChanged(true)
         } else {
             launcher.launch(requiredPermissions())
+        }
+    }
+    LaunchedEffect(state.appBannerMessage) {
+        if (state.appBannerMessage != null) {
+            delay(5000)
+            viewModel.clearAppBannerMessage()
         }
     }
 
@@ -355,6 +377,7 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
         LocalToneCurveEditing provides (isToneCurvePanelVisible || isColorAdjustmentPanelVisible),
     ) {
     VideoSeeTheme(theme = state.appTheme) {
+    Box(Modifier.fillMaxSize()) {
     VideoSeeApp(
         state = state,
         onRequestPermission = { launcher.launch(requiredPermissions()) },
@@ -406,6 +429,7 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
         onOpenSettings = viewModel::openSettingsPane,
         onOpenTagSettings = viewModel::openTagSettingsPane,
         onOpenSync = viewModel::openSyncPane,
+        onOpenTsConvert = viewModel::openTsConvertPane,
         onOpenBackup = viewModel::openBackupPane,
         onSelectAppTheme = viewModel::selectAppTheme,
         onSyncHostChange = viewModel::updateSyncHost,
@@ -415,6 +439,15 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
         onLoadSyncPendingFiles = viewModel::loadSyncPendingFiles,
         onDownloadSyncFile = viewModel::downloadSyncFile,
         onDownloadAllSyncFiles = viewModel::downloadAllSyncFiles,
+        onTsDownloadDirectoryChange = viewModel::updateTsDownloadDirectory,
+        onTsNewSourcePathChange = viewModel::updateTsNewSourcePath,
+        onAddTsSourcePath = viewModel::addTsSourcePath,
+        onPickTsSourceFolder = { tsSourceTreeLauncher.launch(null) },
+        onRemoveTsSourcePath = viewModel::removeTsSourcePath,
+        onScanTsVideos = viewModel::scanTsVideos,
+        onConvertTsVideo = viewModel::convertTsVideo,
+        onDownloadTsVideo = viewModel::downloadTsVideo,
+        onConvertAndDownloadAllTsVideos = viewModel::convertAndDownloadAllTsVideos,
         onAddTag = viewModel::addTag,
         onDeleteTag = viewModel::deleteTag,
         onToggleMediaTag = viewModel::toggleMediaTag,
@@ -610,7 +643,46 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
             importLauncher.launch(arrayOf("application/json", "text/*", "application/octet-stream"))
         },
     )
+    AppTopBanner(
+        message = state.appBannerMessage,
+        onDismiss = viewModel::clearAppBannerMessage,
+        modifier = Modifier
+            .align(Alignment.TopCenter)
+            .padding(top = 12.dp, start = 16.dp, end = 16.dp),
+    )
     }
+    }
+    }
+}
+
+@Composable
+private fun AppTopBanner(
+    message: String?,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = message != null,
+        modifier = modifier.zIndex(20f),
+        enter = slideInVertically { -it } + fadeIn(),
+        exit = slideOutVertically { -it } + fadeOut(),
+    ) {
+        Surface(
+            modifier = Modifier
+                .widthIn(max = 560.dp)
+                .clickable(onClick = onDismiss),
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.primary,
+        ) {
+            Text(
+                text = message.orEmpty(),
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                color = MaterialTheme.colorScheme.onPrimary,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 
@@ -646,6 +718,7 @@ private fun VideoSeeApp(
     onOpenSettings: () -> Unit,
     onOpenTagSettings: () -> Unit,
     onOpenSync: () -> Unit,
+    onOpenTsConvert: () -> Unit,
     onOpenBackup: () -> Unit,
     onSelectAppTheme: (AppTheme) -> Unit,
     onSyncHostChange: (String) -> Unit,
@@ -655,6 +728,15 @@ private fun VideoSeeApp(
     onLoadSyncPendingFiles: () -> Unit,
     onDownloadSyncFile: (SyncPendingFile) -> Unit,
     onDownloadAllSyncFiles: () -> Unit,
+    onTsDownloadDirectoryChange: (String) -> Unit,
+    onTsNewSourcePathChange: (String) -> Unit,
+    onAddTsSourcePath: () -> Unit,
+    onPickTsSourceFolder: () -> Unit,
+    onRemoveTsSourcePath: (String) -> Unit,
+    onScanTsVideos: () -> Unit,
+    onConvertTsVideo: (TsVideoCandidate) -> Unit,
+    onDownloadTsVideo: (TsVideoCandidate) -> Unit,
+    onConvertAndDownloadAllTsVideos: () -> Unit,
     onAddTag: (String) -> Unit,
     onDeleteTag: (String) -> Unit,
     onToggleMediaTag: (String, String) -> Unit,
@@ -739,6 +821,7 @@ private fun VideoSeeApp(
                     onOpenSettings = onOpenSettings,
                     onOpenTagSettings = onOpenTagSettings,
                     onOpenSync = onOpenSync,
+                    onOpenTsConvert = onOpenTsConvert,
                     onOpenBackup = onOpenBackup,
                     onSelectAppTheme = onSelectAppTheme,
                     onSyncHostChange = onSyncHostChange,
@@ -748,6 +831,15 @@ private fun VideoSeeApp(
                     onLoadSyncPendingFiles = onLoadSyncPendingFiles,
                     onDownloadSyncFile = onDownloadSyncFile,
                     onDownloadAllSyncFiles = onDownloadAllSyncFiles,
+                    onTsDownloadDirectoryChange = onTsDownloadDirectoryChange,
+                    onTsNewSourcePathChange = onTsNewSourcePathChange,
+                    onAddTsSourcePath = onAddTsSourcePath,
+                    onPickTsSourceFolder = onPickTsSourceFolder,
+                    onRemoveTsSourcePath = onRemoveTsSourcePath,
+                    onScanTsVideos = onScanTsVideos,
+                    onConvertTsVideo = onConvertTsVideo,
+                    onDownloadTsVideo = onDownloadTsVideo,
+                    onConvertAndDownloadAllTsVideos = onConvertAndDownloadAllTsVideos,
                     onAddTag = onAddTag,
                     onDeleteTag = onDeleteTag,
                     onCreateFavoriteFolder = onCreateFavoriteFolder,
@@ -982,6 +1074,7 @@ private fun BrowserScreen(
     onOpenSettings: () -> Unit,
     onOpenTagSettings: () -> Unit,
     onOpenSync: () -> Unit,
+    onOpenTsConvert: () -> Unit,
     onOpenBackup: () -> Unit,
     onSelectAppTheme: (AppTheme) -> Unit,
     onSyncHostChange: (String) -> Unit,
@@ -991,6 +1084,15 @@ private fun BrowserScreen(
     onLoadSyncPendingFiles: () -> Unit,
     onDownloadSyncFile: (SyncPendingFile) -> Unit,
     onDownloadAllSyncFiles: () -> Unit,
+    onTsDownloadDirectoryChange: (String) -> Unit,
+    onTsNewSourcePathChange: (String) -> Unit,
+    onAddTsSourcePath: () -> Unit,
+    onPickTsSourceFolder: () -> Unit,
+    onRemoveTsSourcePath: (String) -> Unit,
+    onScanTsVideos: () -> Unit,
+    onConvertTsVideo: (TsVideoCandidate) -> Unit,
+    onDownloadTsVideo: (TsVideoCandidate) -> Unit,
+    onConvertAndDownloadAllTsVideos: () -> Unit,
     onAddTag: (String) -> Unit,
     onDeleteTag: (String) -> Unit,
     onCreateFavoriteFolder: () -> Unit,
@@ -1062,6 +1164,7 @@ private fun BrowserScreen(
                     onOpenBackup = onOpenBackup,
                     onOpenTagSettings = onOpenTagSettings,
                     onOpenSync = onOpenSync,
+                    onOpenTsConvert = onOpenTsConvert,
                     modifier = Modifier.fillMaxSize(),
                 )
                 RightPaneMode.Tags -> TagSettingsScreen(
@@ -1086,6 +1189,30 @@ private fun BrowserScreen(
                     onRefresh = onLoadSyncPendingFiles,
                     onDownload = onDownloadSyncFile,
                     onDownloadAll = onDownloadAllSyncFiles,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                RightPaneMode.TsConvert -> TsConvertScreen(
+                    downloadDirectory = state.tsDownloadDirectory,
+                    privateImportDirectory = state.tsPrivateImportDirectory,
+                    pathStatuses = state.tsPathStatuses,
+                    scanIssues = state.tsScanIssues,
+                    videos = state.tsVideos,
+                    convertingIds = state.tsConvertingIds,
+                    downloadingIds = state.tsDownloadingIds,
+                    convertedOutputPaths = state.tsConvertedOutputPaths,
+                    isScanning = state.tsIsScanning,
+                    message = state.tsMessage,
+                    downloadedCount = state.tsDownloadedCount,
+                    batchIsRunning = state.tsBatchIsRunning,
+                    batchTotal = state.tsBatchTotal,
+                    batchCompleted = state.tsBatchCompleted,
+                    batchCurrentName = state.tsBatchCurrentName,
+                    batchFailedCount = state.tsBatchFailedCount,
+                    onDownloadDirectoryChange = onTsDownloadDirectoryChange,
+                    onScan = onScanTsVideos,
+                    onConvert = onConvertTsVideo,
+                    onDownload = onDownloadTsVideo,
+                    onConvertAndDownloadAll = onConvertAndDownloadAllTsVideos,
                     modifier = Modifier.fillMaxSize(),
                 )
                 RightPaneMode.Backup -> BackupScreen(
@@ -2076,6 +2203,7 @@ private fun SettingsScreen(
     onOpenBackup: () -> Unit,
     onOpenTagSettings: () -> Unit,
     onOpenSync: () -> Unit,
+    onOpenTsConvert: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -2108,6 +2236,8 @@ private fun SettingsScreen(
                 SettingsAction("标签设置", "新建、整理或删除标签", onOpenTagSettings)
                 Spacer(Modifier.height(8.dp))
                 SettingsAction("下载", "连接手机同步服务并下载文件", onOpenSync)
+                Spacer(Modifier.height(8.dp))
+                SettingsAction("ts视频转换", "扫描本地 HLS 分片并转换成 MP4", onOpenTsConvert)
             }
         }
     }
@@ -2380,6 +2510,306 @@ private fun SyncFileRow(
         SortChip(
             text = if (isDownloading) "下载中" else "下载",
             selected = true,
+            onClick = {
+                if (!isDownloading) onDownload()
+            },
+        )
+    }
+}
+
+@Composable
+private fun TsConvertScreen(
+    downloadDirectory: String,
+    privateImportDirectory: String,
+    pathStatuses: List<TsSourcePathStatus>,
+    scanIssues: List<TsScanIssue>,
+    videos: List<TsVideoCandidate>,
+    convertingIds: Set<String>,
+    downloadingIds: Set<String>,
+    convertedOutputPaths: Map<String, String>,
+    isScanning: Boolean,
+    message: String?,
+    downloadedCount: Int,
+    batchIsRunning: Boolean,
+    batchTotal: Int,
+    batchCompleted: Int,
+    batchCurrentName: String,
+    batchFailedCount: Int,
+    onDownloadDirectoryChange: (String) -> Unit,
+    onScan: () -> Unit,
+    onConvert: (TsVideoCandidate) -> Unit,
+    onDownload: (TsVideoCandidate) -> Unit,
+    onConvertAndDownloadAll: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.background)
+            .padding(14.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("ts视频转换", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            SortChip(
+                text = if (isScanning) "扫描中" else "扫描",
+                selected = true,
+                onClick = {
+                    if (!isScanning) onScan()
+                },
+            )
+            SortChip(
+                text = if (batchIsRunning) "批量处理中" else "全部转换并下载",
+                selected = true,
+                onClick = {
+                    if (!isScanning && !batchIsRunning) onConvertAndDownloadAll()
+                },
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        TextField(
+            value = downloadDirectory,
+            onValueChange = onDownloadDirectoryChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("下载文件夹") },
+            singleLine = true,
+        )
+        Spacer(Modifier.height(8.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(10.dp),
+        ) {
+            Text("固定扫描文件夹", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            Text(
+                privateImportDirectory,
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        if (pathStatuses.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(pathStatuses.first().message, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        }
+        if (message != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (downloadedCount > 0) {
+            Spacer(Modifier.height(4.dp))
+            Text("本地已记录 $downloadedCount 个已下载视频", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        }
+        if (batchTotal > 0 && (batchIsRunning || batchCompleted > 0)) {
+            Spacer(Modifier.height(10.dp))
+            TsBatchProgress(
+                completed = batchCompleted,
+                total = batchTotal,
+                currentName = batchCurrentName,
+                failedCount = batchFailedCount,
+                isRunning = batchIsRunning,
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        if (isScanning) {
+            Box(Modifier.fillMaxWidth().padding(18.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else if (videos.isEmpty() && scanIssues.isEmpty()) {
+            EmptyScreen("没有待转换视频")
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(videos, key = { it.id }) { video ->
+                    TsVideoRow(
+                        video = video,
+                        isConverting = video.id in convertingIds,
+                        isDownloading = video.id in downloadingIds,
+                        isConverted = video.id in convertedOutputPaths,
+                        onConvert = { onConvert(video) },
+                        onDownload = { onDownload(video) },
+                    )
+                }
+                if (scanIssues.isNotEmpty()) {
+                    item {
+                        Text("扫描诊断", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                    }
+                    items(scanIssues, key = { "${it.path}:${it.reason}" }) { issue ->
+                        TsScanIssueRow(issue)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TsBatchProgress(
+    completed: Int,
+    total: Int,
+    currentName: String,
+    failedCount: Int,
+    isRunning: Boolean,
+) {
+    val progress = if (total > 0) (completed.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(10.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (isRunning) "批量转换下载中" else "批量处理完成",
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = "$completed/$total",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(MaterialTheme.colorScheme.background),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(progress)
+                    .background(MaterialTheme.colorScheme.primary),
+            )
+        }
+        if (isRunning && currentName.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "当前: $currentName",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (failedCount > 0) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "失败 $failedCount 个，已继续处理后续视频",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TsScanIssueRow(issue: TsScanIssue) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(10.dp),
+    ) {
+        Text(issue.path, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+        Text(
+            issue.reason,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+@Composable
+private fun TsSourcePathRow(
+    path: String,
+    status: TsSourcePathStatus?,
+    onRemove: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(path, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+            Text(
+                status?.message ?: "未扫描",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        SortChip("删除", selected = false, onClick = onRemove)
+    }
+}
+
+@Composable
+private fun TsVideoRow(
+    video: TsVideoCandidate,
+    isConverting: Boolean,
+    isDownloading: Boolean,
+    isConverted: Boolean,
+    onConvert: () -> Unit,
+    onDownload: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                video.outputFileName,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "${video.segmentCount} 个分片 · ${(video.durationSeconds * 1000L).toLong().formatDuration()} · ${video.totalSizeBytes.formatBytes()}",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        SortChip(
+            text = when {
+                isConverting -> "转换中"
+                isConverted -> "已转换"
+                else -> "转换"
+            },
+            selected = true,
+            onClick = {
+                if (!isConverting && !isConverted) onConvert()
+            },
+        )
+        SortChip(
+            text = if (isDownloading) "下载中" else "下载",
+            selected = isConverted,
             onClick = {
                 if (!isDownloading) onDownload()
             },
