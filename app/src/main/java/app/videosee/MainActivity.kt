@@ -2820,6 +2820,7 @@ private fun MediaViewer(
             initialPlaybackPositionMillis = initialPlaybackPositionMillis,
             initialPlayWhenReady = initialPlayWhenReady,
             onPlaybackStateChange = onVideoPlaybackStateChange,
+            showFileName = scale <= 1f,
         )
 
         val actionBottomAnchor = maxHeight / 4
@@ -2873,20 +2874,6 @@ private fun MediaViewer(
                         )
                     }
                 }
-            }
-            if (item.mediaType == MediaType.Video) {
-                Text(
-                    text = item.displayName,
-                    modifier = Modifier
-                        .widthIn(max = 280.dp)
-                        .padding(start = 12.dp),
-                    color = Color(0x99D0D0D0),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.End,
-                )
             }
         }
         if (item.mediaType == MediaType.Image) {
@@ -5951,6 +5938,7 @@ private fun MediaSurface(
     initialPlaybackPositionMillis: Long = 0L,
     initialPlayWhenReady: Boolean = true,
     onPlaybackStateChange: ((Long, Boolean) -> Unit)? = null,
+    showFileName: Boolean = true,
 ) {
     when {
         item.mediaType == MediaType.Video && activeVideo -> VideoPlayer(
@@ -5971,6 +5959,7 @@ private fun MediaSurface(
             initialPlaybackPositionMillis = initialPlaybackPositionMillis,
             initialPlayWhenReady = initialPlayWhenReady,
             onPlaybackStateChange = onPlaybackStateChange,
+            showFileName = showFileName,
         )
 
         else -> StableAspectMediaFrame(
@@ -6065,6 +6054,7 @@ private fun VideoPlayer(
     initialPlaybackPositionMillis: Long = 0L,
     initialPlayWhenReady: Boolean = true,
     onPlaybackStateChange: ((Long, Boolean) -> Unit)? = null,
+    showFileName: Boolean = true,
 ) {
     val context = LocalContext.current
     val toneCurve = LocalToneCurve.current
@@ -6471,6 +6461,29 @@ private fun VideoPlayer(
                     fontWeight = FontWeight.SemiBold,
                 )
             }
+        }
+
+        AnimatedVisibility(
+            visible = showFileName && !controlsVisible,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(start = 64.dp, end = 64.dp, bottom = 20.dp),
+            enter = fadeIn(animationSpec = tween(ViewerUiSpec.VIEWER_TRANSITION_DURATION_MILLIS)),
+            exit = fadeOut(animationSpec = tween(ViewerUiSpec.VIEWER_TRANSITION_DURATION_MILLIS)),
+        ) {
+            Text(
+                text = item.displayName,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0x99000000))
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                color = Color(0x70EAF2FF),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
         }
 
         AnimatedVisibility(
