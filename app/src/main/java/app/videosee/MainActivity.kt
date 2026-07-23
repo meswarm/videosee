@@ -88,6 +88,7 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
+import androidx.compose.material.icons.automirrored.rounded.RotateRight
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material3.Button
@@ -148,9 +149,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -1876,6 +1879,31 @@ private fun ViewerDeleteButton(
 }
 
 @Composable
+private fun ViewerRotateButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    size: Dp = 48.dp,
+    iconSize: Dp = 25.dp,
+) {
+    Box(
+        modifier = modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(Color(0x664AA8FF))
+            .border(1.dp, Color(0xAA9FD3FF), CircleShape)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.AutoMirrored.Rounded.RotateRight,
+            contentDescription = "顺时针旋转 90 度",
+            modifier = Modifier.size(iconSize),
+            tint = Color(0xFFE3F2FF),
+        )
+    }
+}
+
+@Composable
 private fun ViewerTagRail(
     tags: List<String>,
     selectedTags: Set<String>,
@@ -2694,6 +2722,8 @@ private fun MediaViewer(
     var offsetY by remember { mutableFloatStateOf(0f) }
     var armedBoundaryIntent by remember { mutableStateOf<SwipeIntent?>(null) }
     var boundaryFeedbackText by remember { mutableStateOf<String?>(null) }
+    var videoRotationDegrees by remember(item.uri) { mutableStateOf(0) }
+    var hasVideoRotationStarted by remember(item.uri) { mutableStateOf(false) }
 
     LaunchedEffect(item.uri) {
         if (!hasInitializedViewerItem) {
@@ -2821,6 +2851,7 @@ private fun MediaViewer(
             initialPlayWhenReady = initialPlayWhenReady,
             onPlaybackStateChange = onVideoPlaybackStateChange,
             showFileName = scale <= 1f,
+            videoRotationDegrees = videoRotationDegrees,
         )
 
         val actionBottomAnchor = maxHeight / 4
@@ -2828,6 +2859,7 @@ private fun MediaViewer(
         Row(
             modifier = Modifier
                 .align(Alignment.TopStart)
+                .zIndex(8f)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             verticalAlignment = Alignment.Top,
@@ -2902,6 +2934,20 @@ private fun MediaViewer(
             )
         }
         if (showDeleteAction) {
+            if (item.mediaType == MediaType.Video) {
+                ViewerRotateButton(
+                    onClick = {
+                        videoRotationDegrees = nextVideoRotationDegrees(
+                            currentDegrees = videoRotationDegrees,
+                            hasStarted = hasVideoRotationStarted,
+                        )
+                        hasVideoRotationStarted = true
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = actionBottomAnchor + 110.dp),
+                )
+            }
             ViewerDeleteButton(
                 onClick = onDeleteCurrentMedia,
                 modifier = Modifier
@@ -3201,6 +3247,7 @@ private fun ToneCurvePanel(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .zIndex(40f)
             .pointerInput(panelHeightPx) {
                 detectTapGestures { offset ->
                     if (offset.y < size.height - panelHeightPx) {
@@ -3550,6 +3597,7 @@ private fun ColorAdjustmentPanel(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .zIndex(40f)
             .pointerInput(panelHeightPx) {
                 detectTapGestures { offset ->
                     if (offset.y < size.height - panelHeightPx) {
@@ -4918,14 +4966,24 @@ private fun MultiMediaPane(
     var resumeAfterScrubbing by remember(item.uri) { mutableStateOf(false) }
     var activeSegment by remember(item.uri) { mutableStateOf<VideoSegment?>(null) }
     var isMuted by remember(item.uri) { mutableStateOf(false) }
+    var videoRotationDegrees by remember(item.uri) { mutableStateOf(0) }
+    var hasVideoRotationStarted by remember(item.uri) { mutableStateOf(false) }
     var controlsAutoHideToken by remember(item.uri) { mutableStateOf(0) }
     var suppressNextControlsTap by remember(item.uri) { mutableStateOf(false) }
     var controlsTapGuardToken by remember(item.uri) { mutableStateOf(0) }
     val authorId = remember(item.displayName) { item.displayName.substringBefore('_').trim() }
+    val videoEffectsKey = remember(toneCurve, colorAdjustments) {
+        VideoEffectsKey(toneCurve, colorAdjustments)
+    }
+    val initialVideoEffects = remember(videoEffectsKey) {
+        buildVideoEffects(toneCurve, colorAdjustments)
+    }
     val player = if (item.mediaType == MediaType.Video) {
         remember(item.uri) {
             ExoPlayer.Builder(context).build().apply {
-                setVideoEffects(buildVideoEffects(toneCurve, colorAdjustments))
+                if (initialVideoEffects.isNotEmpty()) {
+                    setVideoEffects(initialVideoEffects)
+                }
                 setMediaItem(fromUri(Uri.parse(item.uri)))
                 videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
                 repeatMode = Player.REPEAT_MODE_ONE
@@ -4937,7 +4995,8 @@ private fun MultiMediaPane(
     } else {
         null
     }
-    var wasToneCurveEditing by remember(player) { mutableStateOf(false) }
+    var appliedVideoEffectsKey by remember(player) { mutableStateOf<VideoEffectsKey?>(videoEffectsKey) }
+    var resumePlaybackAfterAdjustment by remember(player) { mutableStateOf(false) }
     PausePlayerWhenAppStops(player)
 
     if (player != null) {
@@ -5010,18 +5069,49 @@ private fun MultiMediaPane(
         player?.setPlaybackSpeed(playbackSpeed)
     }
 
-    LaunchedEffect(player, toneCurve, colorAdjustments, isToneCurveEditing) {
+    LaunchedEffect(player, isToneCurveEditing) {
         player?.let { activePlayer ->
             if (isToneCurveEditing) {
+                resumePlaybackAfterAdjustment = activePlayer.playWhenReady
                 activePlayer.pause()
-            }
-            activePlayer.setVideoEffects(buildVideoEffects(toneCurve, colorAdjustments))
-            if (isToneCurveEditing) {
-                activePlayer.refreshToneCurveVideoFrame()
-            } else if (wasToneCurveEditing) {
+            } else if (resumePlaybackAfterAdjustment) {
                 activePlayer.play()
             }
-            wasToneCurveEditing = isToneCurveEditing
+            if (!isToneCurveEditing) {
+                resumePlaybackAfterAdjustment = false
+            }
+        }
+    }
+
+    LaunchedEffect(player, toneCurve, colorAdjustments, isToneCurveEditing) {
+        player?.let { activePlayer ->
+            val nextKey = videoEffectsKey
+            if (appliedVideoEffectsKey == nextKey) return@LaunchedEffect
+            if (appliedVideoEffectsKey == null && nextKey.isIdentity) {
+                appliedVideoEffectsKey = nextKey
+                return@LaunchedEffect
+            }
+            if (isToneCurveEditing) {
+                delay(VIDEO_EFFECT_EDITING_DEBOUNCE_MILLIS)
+            }
+            val nextEffects = buildVideoEffectsInBackground(nextKey)
+            val resumePlayback = !isToneCurveEditing && (
+                activePlayer.playWhenReady || resumePlaybackAfterAdjustment
+            )
+            if (resumePlayback) {
+                resumePlaybackAfterAdjustment = true
+            }
+            val positionMillis = activePlayer.currentPosition.coerceAtLeast(0L)
+            activePlayer.applyVideoEffectsWithPipelineReset(
+                mediaUri = item.uri,
+                positionMillis = positionMillis,
+                effects = nextEffects,
+                resumePlayback = resumePlayback,
+            )
+            appliedVideoEffectsKey = nextKey
+            if (resumePlayback) {
+                resumePlaybackAfterAdjustment = false
+            }
         }
     }
 
@@ -5128,6 +5218,7 @@ private fun MultiMediaPane(
             offsetX = offsetX,
             offsetY = offsetY,
             aspectRatioOverride = videoAspectRatio,
+            rotationDegrees = videoRotationDegrees,
         ) {
             if (player != null) {
                 AndroidView(
@@ -5221,6 +5312,17 @@ private fun MultiMediaPane(
                     }
                 }
                 if (player != null) {
+                    ViewerRotateButton(
+                        onClick = {
+                            videoRotationDegrees = nextVideoRotationDegrees(
+                                currentDegrees = videoRotationDegrees,
+                                hasStarted = hasVideoRotationStarted,
+                            )
+                            hasVideoRotationStarted = true
+                        },
+                        size = 24.dp,
+                        iconSize = 14.dp,
+                    )
                     val muteBackground = if (isMuted) Color(0x66432127) else Color(0x5044A870)
                     val muteBorder = if (isMuted) Color(0x88FF9C9C) else Color(0x8890E0AC)
                     val muteTint = if (isMuted) Color(0xFFFFD0D0) else Color(0xFFD6FFE3)
@@ -5450,6 +5552,8 @@ private const val MAX_VIEWER_SCALE = 5f
 private const val DEFAULT_SINGLE_MEDIA_DISPLAY_SCALE = 0.86f
 private const val CONTROLS_AFTER_SCRUB_VISIBLE_MILLIS = 10_000L
 private const val CONTROLS_SCRUB_TAP_GUARD_MILLIS = 500L
+private const val VIDEO_EFFECT_EDITING_DEBOUNCE_MILLIS = 120L
+private const val VIDEO_EFFECT_RESUME_DELAY_MILLIS = 1_000L
 
 private data class ToneCurve(
     val blacks: Float = 0f,
@@ -5870,6 +5974,14 @@ private val LocalToneCurve = staticCompositionLocalOf { ToneCurve() }
 private val LocalColorAdjustments = staticCompositionLocalOf { ColorAdjustments() }
 private val LocalToneCurveEditing = staticCompositionLocalOf { false }
 
+private data class VideoEffectsKey(
+    val toneCurve: ToneCurve,
+    val colorAdjustments: ColorAdjustments,
+) {
+    val isIdentity: Boolean
+        get() = toneCurve.isIdentity && colorAdjustments.isIdentity
+}
+
 @Composable
 private fun PausePlayerWhenAppStops(
     player: Player?,
@@ -5895,9 +6007,42 @@ private fun PausePlayerWhenAppStops(
     }
 }
 
-private fun buildVideoEffects(toneCurve: ToneCurve, colorAdjustments: ColorAdjustments): MutableList<Effect> {
-    return mutableListOf<Effect>(toneCurve.toVideoEffect()).apply {
+private suspend fun buildVideoEffectsInBackground(key: VideoEffectsKey): List<Effect> {
+    return withContext(Dispatchers.Default) {
+        buildVideoEffects(key.toneCurve, key.colorAdjustments)
+    }
+}
+
+private fun buildVideoEffects(toneCurve: ToneCurve, colorAdjustments: ColorAdjustments): List<Effect> {
+    return buildList {
+        if (!toneCurve.isIdentity) {
+            add(toneCurve.toVideoEffect())
+        }
         addAll(colorAdjustments.toVideoEffects())
+    }
+}
+
+private suspend fun ExoPlayer.applyVideoEffectsWithPipelineReset(
+    mediaUri: String,
+    positionMillis: Long,
+    effects: List<Effect>,
+    resumePlayback: Boolean,
+    onPauseStateChange: ((Boolean) -> Unit)? = null,
+) {
+    pause()
+    playWhenReady = false
+    onPauseStateChange?.invoke(true)
+    stop()
+    clearMediaItems()
+    setVideoEffects(effects)
+    setMediaItem(fromUri(Uri.parse(mediaUri)))
+    prepare()
+    seekTo(positionMillis.coerceAtLeast(0L))
+    refreshToneCurveVideoFrame()
+    if (resumePlayback) {
+        delay(VIDEO_EFFECT_RESUME_DELAY_MILLIS)
+        play()
+        onPauseStateChange?.invoke(false)
     }
 }
 
@@ -5916,6 +6061,11 @@ private fun Player.effectiveDurationMillis(fallbackDurationMillis: Long = 0L): L
     return duration
         .takeIf { it > 0L && it != C.TIME_UNSET }
         ?: fallbackDurationMillis.coerceAtLeast(0L)
+}
+
+private fun nextVideoRotationDegrees(currentDegrees: Int, hasStarted: Boolean): Int {
+    val increment = if (hasStarted) 45 else 180
+    return ((currentDegrees + increment) % 360 + 360) % 360
 }
 
 @Composable
@@ -5939,6 +6089,7 @@ private fun MediaSurface(
     initialPlayWhenReady: Boolean = true,
     onPlaybackStateChange: ((Long, Boolean) -> Unit)? = null,
     showFileName: Boolean = true,
+    videoRotationDegrees: Int = 0,
 ) {
     when {
         item.mediaType == MediaType.Video && activeVideo -> VideoPlayer(
@@ -5960,6 +6111,7 @@ private fun MediaSurface(
             initialPlayWhenReady = initialPlayWhenReady,
             onPlaybackStateChange = onPlaybackStateChange,
             showFileName = showFileName,
+            rotationDegrees = videoRotationDegrees,
         )
 
         else -> StableAspectMediaFrame(
@@ -5986,6 +6138,7 @@ private fun StableAspectMediaFrame(
     offsetX: Float,
     offsetY: Float,
     aspectRatioOverride: Float? = null,
+    rotationDegrees: Int = 0,
     content: @Composable () -> Unit,
 ) {
     BoxWithConstraints(
@@ -5993,22 +6146,41 @@ private fun StableAspectMediaFrame(
         contentAlignment = Alignment.Center,
     ) {
         val aspectRatio = aspectRatioOverride ?: item.displayAspectRatio
+        val normalizedRotation = ((rotationDegrees % 360) + 360) % 360
+        val isQuarterTurn = normalizedRotation == 90 || normalizedRotation == 270
+        val displayAspectRatio = if (isQuarterTurn && aspectRatio != null) {
+            1f / aspectRatio
+        } else {
+            aspectRatio
+        }
         val containerRatio = if (maxHeight.value > 0f) maxWidth.value / maxHeight.value else null
         val aspectModifier = when {
-            aspectRatio == null || containerRatio == null -> Modifier.fillMaxSize()
-            aspectRatio > containerRatio -> Modifier.fillMaxWidth().aspectRatio(aspectRatio)
-            else -> Modifier.fillMaxHeight().aspectRatio(aspectRatio)
+            displayAspectRatio == null || containerRatio == null -> Modifier.fillMaxSize()
+            displayAspectRatio > containerRatio -> Modifier.fillMaxWidth().aspectRatio(displayAspectRatio)
+            else -> Modifier.fillMaxHeight().aspectRatio(displayAspectRatio)
         }
 
-        Box(
+        BoxWithConstraints(
             modifier = aspectModifier.graphicsLayer {
                 scaleX = scale
                 scaleY = scale
                 translationX = offsetX
                 translationY = offsetY
             },
+            contentAlignment = Alignment.Center,
         ) {
-            content()
+            val contentModifier = if (isQuarterTurn && aspectRatio != null) {
+                Modifier
+                    .size(width = maxHeight, height = maxWidth)
+                    .graphicsLayer { rotationZ = normalizedRotation.toFloat() }
+            } else {
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { rotationZ = normalizedRotation.toFloat() }
+            }
+            Box(modifier = contentModifier) {
+                content()
+            }
         }
     }
 }
@@ -6055,6 +6227,7 @@ private fun VideoPlayer(
     initialPlayWhenReady: Boolean = true,
     onPlaybackStateChange: ((Long, Boolean) -> Unit)? = null,
     showFileName: Boolean = true,
+    rotationDegrees: Int = 0,
 ) {
     val context = LocalContext.current
     val toneCurve = LocalToneCurve.current
@@ -6092,12 +6265,12 @@ private fun VideoPlayer(
     // on every vertical swipe leaves the screen without a frame until the next video decodes.
     val player = remember {
         ExoPlayer.Builder(context).build().apply {
-            setVideoEffects(buildVideoEffects(toneCurve, colorAdjustments))
             videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
             repeatMode = Player.REPEAT_MODE_ONE
         }
     }
-    var wasToneCurveEditing by remember(player) { mutableStateOf(false) }
+    var appliedVideoEffectsKey by remember(player) { mutableStateOf<VideoEffectsKey?>(null) }
+    var resumePlaybackAfterAdjustment by remember(player) { mutableStateOf(false) }
     PausePlayerWhenAppStops(player) {
         isPaused = true
     }
@@ -6109,9 +6282,7 @@ private fun VideoPlayer(
     }
 
     LaunchedEffect(player, item.uri, initialPlaybackPositionMillis, initialPlayWhenReady) {
-        player.stop()
-        player.clearMediaItems()
-        player.setVideoEffects(buildVideoEffects(toneCurve, colorAdjustments))
+        player.pause()
         player.setMediaItem(fromUri(Uri.parse(item.uri)))
         player.prepare()
         player.seekTo(initialPlaybackPositionMillis.coerceAtLeast(0L))
@@ -6191,19 +6362,50 @@ private fun VideoPlayer(
         player.setPlaybackSpeed(playbackSpeed)
     }
 
-    LaunchedEffect(player, toneCurve, colorAdjustments, isToneCurveEditing) {
+    LaunchedEffect(player, isToneCurveEditing) {
         if (isToneCurveEditing) {
+            resumePlaybackAfterAdjustment = player.playWhenReady
             player.pause()
             isPaused = true
-        }
-        player.setVideoEffects(buildVideoEffects(toneCurve, colorAdjustments))
-        if (isToneCurveEditing) {
-            player.refreshToneCurveVideoFrame()
-        } else if (wasToneCurveEditing) {
+        } else if (resumePlaybackAfterAdjustment) {
             player.play()
             isPaused = false
         }
-        wasToneCurveEditing = isToneCurveEditing
+        if (!isToneCurveEditing) {
+            resumePlaybackAfterAdjustment = false
+        }
+    }
+
+    LaunchedEffect(player, item.uri, toneCurve, colorAdjustments, isToneCurveEditing) {
+        val nextKey = VideoEffectsKey(toneCurve, colorAdjustments)
+        if (appliedVideoEffectsKey == nextKey) return@LaunchedEffect
+        if (appliedVideoEffectsKey == null && nextKey.isIdentity) {
+            appliedVideoEffectsKey = nextKey
+            return@LaunchedEffect
+        }
+        if (isToneCurveEditing) {
+            delay(VIDEO_EFFECT_EDITING_DEBOUNCE_MILLIS)
+        }
+        val nextEffects = buildVideoEffectsInBackground(nextKey)
+        val resumePlayback = !isToneCurveEditing && (
+            player.playWhenReady || resumePlaybackAfterAdjustment
+        )
+        if (resumePlayback) {
+            resumePlaybackAfterAdjustment = true
+        }
+        val positionMillis = player.currentPosition.coerceAtLeast(0L)
+        player.applyVideoEffectsWithPipelineReset(
+            mediaUri = item.uri,
+            positionMillis = positionMillis,
+            effects = nextEffects,
+            resumePlayback = resumePlayback,
+        ) { paused ->
+            isPaused = paused
+        }
+        appliedVideoEffectsKey = nextKey
+        if (resumePlayback) {
+            resumePlaybackAfterAdjustment = false
+        }
     }
 
     LaunchedEffect(controlsAutoHideToken) {
@@ -6233,6 +6435,7 @@ private fun VideoPlayer(
             offsetX = offsetX,
             offsetY = offsetY,
             aspectRatioOverride = playerFrameAspectRatio,
+            rotationDegrees = rotationDegrees,
         ) {
             Box(Modifier.fillMaxSize()) {
                 AsyncImage(

@@ -31,10 +31,9 @@ VideoSee is an Android-only local photo and video browser built with Kotlin, Jet
 - Swipe up or down in fullscreen to move to the previous or next item. At the first or last item, the first extra swipe shows a boundary hint, and a second swipe in the same direction wraps to the other end.
 - For videos, double-tap anywhere on the fullscreen surface to play or pause, and swipe left/right by distance to seek quickly.
 - When the player has not reported video duration yet, the viewer falls back to media metadata so fullscreen and multi-pane progress and seeking remain available.
-- Video controls include a seek bar, current/total time, fixed playback speeds (`0.7x`, `0.9x`, `1.2x`, `1.5x`), and named video segments.
-- Fullscreen viewing includes tone-curve and brightness/contrast-style color controls with saved presets.
+- Video controls include a seek bar, current/total time, fixed playback speeds (`0.7x`, `0.9x`, `1.2x`, `1.5x`), video rotation, and named video segments.
+- Fullscreen viewing includes tone-curve and brightness/contrast-style color controls with saved presets. Video playback rebuilds its effect pipeline after adjustments and returns to the previous position, reducing missed color updates or lost playback state.
 - Capture the current video frame to `Pictures/VideoSee`.
-- When video controls are hidden, the fullscreen filename appears centered at the bottom; it hides while an image is zoomed to avoid covering the content.
 - Tap the fullscreen filename label to copy the filename.
 - Delete the current fullscreen media from the right-side delete button. Android still shows the system media-delete authorization sheet, and after confirmation VideoSee opens the next item.
 - Open the Download page from the left toolbar, configure server IP, port, token, and device ID, then refresh pending files, download one file, or download all.
