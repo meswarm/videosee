@@ -76,6 +76,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
@@ -425,6 +426,7 @@ private fun VideoSeeRoute(viewModel: VideoSeeViewModel = viewModel()) {
         onDeleteVideoSegment = viewModel::deleteVideoSegment,
         onRenameVideoSegment = viewModel::renameVideoSegment,
         onOpenAuthorSearch = viewModel::openAuthorSearch,
+        onReturnToViewerFromAuthorSearch = viewModel::returnToViewerFromAuthorSearch,
         onRefresh = viewModel::refresh,
         onOpenSettings = viewModel::openSettingsPane,
         onOpenTagSettings = viewModel::openTagSettingsPane,
@@ -714,6 +716,7 @@ private fun VideoSeeApp(
     onDeleteVideoSegment: (String, VideoSegment) -> Unit,
     onRenameVideoSegment: (String, VideoSegment, String) -> Unit,
     onOpenAuthorSearch: (String) -> Unit,
+    onReturnToViewerFromAuthorSearch: () -> Unit,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTagSettings: () -> Unit,
@@ -817,6 +820,7 @@ private fun VideoSeeApp(
                     onSetMediaFavoriteLevel = onSetMediaFavoriteLevel,
                     onEnsureVideoThumbnail = onEnsureVideoThumbnail,
                     onOpenItem = onOpenItem,
+                    onReturnToViewerFromAuthorSearch = onReturnToViewerFromAuthorSearch,
                     onRefresh = onRefresh,
                     onOpenSettings = onOpenSettings,
                     onOpenTagSettings = onOpenTagSettings,
@@ -1070,6 +1074,7 @@ private fun BrowserScreen(
     onSetMediaFavoriteLevel: (String, Int) -> Unit,
     onEnsureVideoThumbnail: (MediaItem) -> Unit,
     onOpenItem: (MediaItem) -> Unit,
+    onReturnToViewerFromAuthorSearch: () -> Unit,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenTagSettings: () -> Unit,
@@ -1229,6 +1234,8 @@ private fun BrowserScreen(
                                 sortField = state.mediaSortField,
                                 sortDirection = state.mediaSortDirection,
                                 isRecentPlayback = selectedCollection?.id == "recent-playback",
+                                showReturnToViewer = state.authorSearchReturnContext != null,
+                                onReturnToViewer = onReturnToViewerFromAuthorSearch,
                                 onSelectSortField = onSelectMediaSortField,
                                 onToggleSortDirection = onToggleMediaSortDirection,
                                 modifier = Modifier.fillMaxWidth(),
@@ -1275,6 +1282,8 @@ private fun MediaSortToolbar(
     sortField: MediaSortField,
     sortDirection: SortDirection,
     isRecentPlayback: Boolean,
+    showReturnToViewer: Boolean,
+    onReturnToViewer: () -> Unit,
     onSelectSortField: (MediaSortField) -> Unit,
     onToggleSortDirection: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1287,6 +1296,28 @@ private fun MediaSortToolbar(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("媒体", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        AnimatedVisibility(visible = showReturnToViewer) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable(onClick = onReturnToViewer)
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    "返回视频",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
         Spacer(Modifier.weight(1f))
         CompactDropdown(
             label = "排序 · ${sortField.label(isRecentPlayback)}",

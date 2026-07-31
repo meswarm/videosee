@@ -46,6 +46,17 @@ data class VideoSegment(
     val name: String? = null,
 )
 
+data class ViewerSearchReturnContext(
+    val mediaUri: String,
+    val browserMode: BrowserMode,
+    val selectedFolderId: String?,
+    val selectedAuthorId: String?,
+    val selectedTagIds: Set<String>,
+    val selectedFavoriteFolderId: String?,
+    val favoriteMediaSortUriOrder: List<String>,
+    val shuffleUriOrder: List<String>,
+)
+
 data class VideoSeeUiState(
     val appTheme: AppTheme = AppTheme.Midnight,
     val folders: List<MediaFolder> = emptyList(),
@@ -74,6 +85,7 @@ data class VideoSeeUiState(
     val selectedTagIds: Set<String> = emptySet(),
     val selectedFavoriteFolderId: String? = null,
     val viewerIndex: Int? = null,
+    val authorSearchReturnContext: ViewerSearchReturnContext? = null,
     val gridReturnTargetUri: String? = null,
     val isLoading: Boolean = false,
     val isRefreshing: Boolean = false,
@@ -296,6 +308,7 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
     private val recentPlaybackStore = RecentPlaybackStore(application)
     private val videoSegmentStore = VideoSegmentStore(application)
     private var shuffleResetJob: Job? = null
+    private var authorSearchReturnResetJob: Job? = null
     private var tsBatchJob: Job? = null
     private val thumbnailRequestsInFlight = mutableSetOf<String>()
     private val _uiState = MutableStateFlow(
@@ -781,6 +794,18 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
     fun openAuthorSearch(authorId: String) {
         val query = authorId.trim().takeIf { it.isNotBlank() } ?: return
         _uiState.update { state ->
+            val returnContext = state.authorSearchReturnContext ?: state.viewerItem?.let { viewerItem ->
+                ViewerSearchReturnContext(
+                    mediaUri = viewerItem.uri,
+                    browserMode = state.browserMode,
+                    selectedFolderId = state.selectedFolderId,
+                    selectedAuthorId = state.selectedAuthorId,
+                    selectedTagIds = state.selectedTagIds,
+                    selectedFavoriteFolderId = state.selectedFavoriteFolderId,
+                    favoriteMediaSortUriOrder = state.favoriteMediaSortUriOrder,
+                    shuffleUriOrder = state.shuffleUriOrder,
+                )
+            }
             val matchingAuthorId = state.authors.firstOrNull { author ->
                 author.name.equals(query, ignoreCase = true) || author.name.contains(query, ignoreCase = true)
             }?.id
@@ -790,7 +815,41 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
                 selectedAuthorId = matchingAuthorId ?: state.selectedAuthorId,
                 rightPaneMode = RightPaneMode.Browser,
                 viewerIndex = null,
+                authorSearchReturnContext = returnContext,
             ).withFreshFavoriteMediaSortOrder()
+        }
+        scheduleAuthorSearchReturnReset()
+    }
+
+    fun returnToViewerFromAuthorSearch() {
+        shuffleResetJob?.cancel()
+        authorSearchReturnResetJob?.cancel()
+        _uiState.update { state ->
+            val returnContext = state.authorSearchReturnContext ?: return@update state
+            val restoredState = state.copy(
+                browserMode = returnContext.browserMode,
+                selectedFolderId = returnContext.selectedFolderId,
+                selectedAuthorId = returnContext.selectedAuthorId,
+                selectedTagIds = returnContext.selectedTagIds,
+                selectedFavoriteFolderId = returnContext.selectedFavoriteFolderId,
+                favoriteMediaSortUriOrder = returnContext.favoriteMediaSortUriOrder,
+                shuffleUriOrder = returnContext.shuffleUriOrder,
+                collectionSearchQuery = "",
+                rightPaneMode = RightPaneMode.Browser,
+                viewerIndex = null,
+                authorSearchReturnContext = null,
+            )
+            val viewerIndex = restoredState.selectedItems.indexOfFirst { it.uri == returnContext.mediaUri }
+            if (viewerIndex < 0) {
+                restoredState.copy(
+                    appBannerMessage = "原视频已不可用",
+                )
+            } else {
+                restoredState.copy(
+                    viewerIndex = viewerIndex,
+                    gridReturnTargetUri = null,
+                )
+            }
         }
     }
 
@@ -1375,6 +1434,16 @@ class VideoSeeViewModel(application: Application) : AndroidViewModel(application
             }
         }
     }
+
+    private fun scheduleAuthorSearchReturnReset() {
+        authorSearchReturnResetJob?.cancel()
+        authorSearchReturnResetJob = viewModelScope.launch {
+            delay(AUTHOR_SEARCH_RETURN_TIMEOUT_MILLIS)
+            _uiState.update { state ->
+                state.copy(authorSearchReturnContext = null)
+            }
+        }
+    }
 }
 
 data class FavoriteBackupImportResult(
@@ -1876,5 +1945,6 @@ private const val MAX_FAVORITE_LEVEL = 3
 private const val FAVORITE_FOLDER_PREFIX = "favorite-folder:"
 private val FAVORITE_FOLDER_DATE_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 private const val SHUFFLE_ORDER_RESET_DELAY_MILLIS = 10 * 60 * 1_000L
+private const val AUTHOR_SEARCH_RETURN_TIMEOUT_MILLIS = 5 * 60 * 1_000L
 private const val RECENT_PLAYBACK_COLLECTION_ID = "recent-playback"
 private const val MAX_RECENT_PLAYBACK_ITEMS = 1_000

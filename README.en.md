@@ -27,6 +27,7 @@ VideoSee is an Android-only local photo and video browser built with Kotlin, Jet
 - Long-press a media card to enter multi-select delete mode, then delete selected media from the current collection.
 - Open any image or video in fullscreen with recent-play history, sequential/shuffle playback, and two- or four-pane viewing.
 - Toggle tags for the current fullscreen media from the left-side tag rail; tag state stays synchronized with the grid.
+- Opening author search from fullscreen preserves the current viewing context. The search results toolbar can return directly to the original collection, sort order, and media item.
 - Fullscreen button areas avoid taking over tiny touch movements too early, reducing missed immediate taps on tags or hearts.
 - Swipe up or down in fullscreen to move to the previous or next item. At the first or last item, the first extra swipe shows a boundary hint, and a second swipe in the same direction wraps to the other end.
 - For videos, double-tap anywhere on the fullscreen surface to play or pause, and swipe left/right by distance to seek quickly.
