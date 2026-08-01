@@ -69,6 +69,7 @@ dependencies {
     implementation("androidx.media3:media3-effect:1.9.2")
     implementation("androidx.media3:media3-transformer:1.9.2")
     implementation("androidx.media3:media3-ui:1.9.2")
+    implementation("androidx.media3:media3-ui-compose:1.9.2")
     implementation("io.coil-kt.coil3:coil-compose:3.1.0")
     implementation("io.coil-kt.coil3:coil-video:3.1.0")
 

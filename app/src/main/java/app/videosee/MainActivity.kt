@@ -14,7 +14,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
-import android.view.LayoutInflater
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -156,7 +155,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -172,8 +170,8 @@ import androidx.media3.effect.ConvolutionFunction1D
 import androidx.media3.effect.SeparableConvolution
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.effect.SingleColorLut
-import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
+import androidx.media3.ui.compose.PlayerSurface
+import androidx.media3.ui.compose.SURFACE_TYPE_TEXTURE_VIEW
 import app.videosee.domain.MediaFolder
 import app.videosee.domain.MediaItem
 import app.videosee.domain.MediaType
@@ -3236,7 +3234,9 @@ private fun MediaViewer(
     onViewerScaleChange: ((Float) -> Unit)? = null,
 ) {
     BackHandler(onBack = onReturnToMultiVideo ?: onClose)
-    var scale by remember { mutableFloatStateOf(initialScale) }
+    var scale by remember {
+        mutableFloatStateOf(initialScale.coerceIn(MIN_VIEWER_SCALE, MAX_VIEWER_SCALE))
+    }
     var hasInitializedViewerItem by remember { mutableStateOf(false) }
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
@@ -3251,9 +3251,11 @@ private fun MediaViewer(
 
     LaunchedEffect(item.uri) {
         if (!hasInitializedViewerItem) {
-            scale = initialScale
+            scale = initialScale.coerceIn(MIN_VIEWER_SCALE, MAX_VIEWER_SCALE)
             hasInitializedViewerItem = true
-        } else if (scale >= 1f) {
+        } else {
+            // Every item opens at its standard fitted size. A zoomed-out scale carried from
+            // the previous item made portrait videos appear as a small window in the center.
             scale = 1f
         }
         offsetX = 0f
@@ -5813,19 +5815,9 @@ private fun MultiMediaPane(
             rotationDegrees = videoRotationDegrees,
         ) {
             if (player != null) {
-                AndroidView(
-                    factory = { viewContext ->
-                            (LayoutInflater.from(viewContext)
-                                .inflate(R.layout.view_video_player, null, false) as PlayerView).apply {
-                            useController = false
-                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                            this.player = player
-                        }
-                    },
-                    update = { view ->
-                        view.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        view.player = player
-                    },
+                PlayerSurface(
+                    player = player,
+                    surfaceType = SURFACE_TYPE_TEXTURE_VIEW,
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
@@ -5915,17 +5907,8 @@ private fun MultiMediaPane(
                             )
                             hasVideoRotationStarted = true
                         },
-                        isLockActive = videoRotationLockState.isLocked,
-                        onLockClick = {
-                            if (videoRotationLockState.isLocked) {
-                                onUnlockVideoRotation()
-                            } else {
-                                onLockVideoRotation(videoRotationDegrees)
-                            }
-                        },
                         size = 24.dp,
                         iconSize = 14.dp,
-                        lockSize = 13.dp,
                     )
                 }
                 if (player != null) {
@@ -6153,7 +6136,7 @@ private fun MultiPaneProgressBar(
 }
 
 private const val VideoGestureDoubleTapTimeoutMillis = 280L
-private const val MIN_VIEWER_SCALE = 0.45f
+private const val MIN_VIEWER_SCALE = 1f
 private const val MAX_VIEWER_SCALE = 5f
 private const val DEFAULT_SINGLE_MEDIA_DISPLAY_SCALE = 0.86f
 private const val CONTROLS_AFTER_SCRUB_VISIBLE_MILLIS = 10_000L
@@ -6857,7 +6840,6 @@ private fun VideoPlayer(
     val currentPlaybackStateChange by rememberUpdatedState(onPlaybackStateChange)
     val coroutineScope = rememberCoroutineScope()
     var isPaused by remember(item.uri) { mutableStateOf(false) }
-    var playerView by remember { mutableStateOf<PlayerView?>(null) }
     var currentPosition by remember(item.uri) {
         mutableStateOf(initialPlaybackPositionMillis.coerceAtLeast(0L))
     }
@@ -6909,7 +6891,7 @@ private fun VideoPlayer(
         isPaused = !initialPlayWhenReady
     }
 
-    DisposableEffect(player, playerView) {
+    DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 val aspectRatio = videoSize.displayAspectRatio() ?: currentItem.displayAspectRatio
@@ -6918,9 +6900,6 @@ private fun VideoPlayer(
                     playerFrameAspectRatio = aspectRatio
                 }
                 player.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
-                playerView?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                playerView?.requestLayout()
-                playerView?.invalidate()
             }
 
             override fun onRenderedFirstFrame() {
@@ -7057,36 +7036,20 @@ private fun VideoPlayer(
             rotationDegrees = rotationDegrees,
         ) {
             Box(Modifier.fillMaxSize()) {
-                AsyncImage(
-                    // A decoded poster frame covers the initial load as well as devices where
-                    // a TextureView has not retained a frame yet.
-                    model = videoFrameImageModel(item),
-                    contentDescription = item.displayName,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit,
-                )
+                if (renderedVideoUri != item.uri) {
+                    AsyncImage(
+                        // Only cover decoder startup. Leaving the poster mounted after the first
+                        // frame makes any TextureView sizing glitch look like a background layer.
+                        model = videoFrameImageModel(item),
+                        contentDescription = item.displayName,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
 
-                AndroidView(
-                    factory = { viewContext ->
-                        (LayoutInflater.from(viewContext)
-                            .inflate(R.layout.view_video_player, null, false) as PlayerView).apply {
-                            useController = false
-                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                            setKeepContentOnPlayerReset(true)
-                            setEnableComposeSurfaceSyncWorkaround(true)
-                            this.player = player
-                            playerView = this
-                        }
-                    },
-                    update = {
-                        player.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
-                        it.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        it.setKeepContentOnPlayerReset(true)
-                        it.setEnableComposeSurfaceSyncWorkaround(true)
-                        it.player = player
-                        it.requestLayout()
-                        it.invalidate()
-                    },
+                PlayerSurface(
+                    player = player,
+                    surfaceType = SURFACE_TYPE_TEXTURE_VIEW,
                     modifier = Modifier.fillMaxSize(),
                 )
 
